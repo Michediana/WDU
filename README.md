@@ -39,7 +39,8 @@ cargo build
 target/debug/wdu-service run                  # servizio in console, per sviluppo
 target/debug/wdu-service install              # registra e avvia come LocalSystem (amministratore)
 target/debug/wdu-service uninstall
-target/debug/wdu-ui                           # UI, sempre da utente normale
+target/debug/wdu-ui                           # UI, sempre da utente normale; se il servizio
+                                              # non risponde lo avvia (UAC) e lo chiude con la UI
 ```
 
 Il servizio va installato da una cartella non scrivibile dagli utenti (Program

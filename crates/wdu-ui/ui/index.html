@@ -11,6 +11,7 @@
     <h1>Aggiornamento driver</h1>
     <nav>
       <button class="tab active" data-tab="updates">Aggiornamenti</button>
+      <button class="tab" data-tab="drivers">Driver installati</button>
       <button class="tab" data-tab="history">Storico</button>
       <button class="tab" data-tab="settings">Impostazioni</button>
     </nav>
@@ -53,6 +54,28 @@
           <tbody id="skipped"></tbody>
         </table>
       </details>
+    </section>
+
+    <section id="tab-drivers" hidden>
+      <div class="toolbar">
+        <input type="search" id="drivers-filter" placeholder="Cerca dispositivo, classe, fornitore…">
+        <label class="check"><input type="checkbox" id="drivers-hidden"> Mostra dispositivi nascosti</label>
+        <label class="check"><input type="checkbox" id="drivers-none"> Mostra dispositivi senza driver</label>
+        <span id="drivers-count" class="muted"></span>
+        <button id="drivers-refresh">Aggiorna</button>
+      </div>
+      <table class="sortable">
+        <thead><tr>
+          <th data-sort="name">Dispositivo</th>
+          <th data-sort="class">Classe</th>
+          <th data-sort="version">Versione</th>
+          <th data-sort="date">Data</th>
+          <th data-sort="provider">Fornitore</th>
+          <th data-sort="origin">Origine</th>
+        </tr></thead>
+        <tbody id="drivers"></tbody>
+      </table>
+      <p id="drivers-empty" class="muted" hidden></p>
     </section>
 
     <section id="tab-history" hidden>

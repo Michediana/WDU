@@ -15,6 +15,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use wdu_core::engine::{self, ScanOptions, ScanResult};
 use wdu_core::history::{History, Outcome};
+use wdu_core::inventory;
 use wdu_core::ipc::{
     PROTOCOL_VERSION, Request, Response, ServiceConfig, ServiceState, ServiceStatus,
 };
@@ -121,6 +122,10 @@ impl Service {
             }
             Request::History => match History::new(self.data_dir.join("history.jsonl")).read() {
                 Ok(records) => Response::History { records },
+                Err(err) => Response::error(format!("{err:#}")),
+            },
+            Request::Devices => match inventory::enumerate_devices(Default::default()) {
+                Ok(devices) => Response::Devices { devices },
                 Err(err) => Response::error(format!("{err:#}")),
             },
             Request::GetConfig => Response::Config {

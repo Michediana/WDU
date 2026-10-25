@@ -95,6 +95,7 @@ async function refreshStatus() {
   // A scan or installation just ended: reload what it changed.
   if (lastState && lastState !== "idle" && !busy) {
     await Promise.all([loadPlan(), loadHistory()]);
+    if (devices) await loadDrivers();
   }
   lastState = status.state;
 }
@@ -189,6 +190,112 @@ async function loadPlan() {
   );
   updateInstallButton();
 }
+
+// --- installed drivers ------------------------------------------------------
+
+let devices = null;
+// Instance ID (lowercase) → last successful WDU installation for that device.
+let installedByWdu = new Map();
+let driversSort = { key: "name", dir: 1 };
+
+// Inbox drivers keep their own INF name; packages added to the driver store
+// (by Windows Update, a vendor setup or WDU) are published as oemNN.inf.
+function origin(d) {
+  const wdu = installedByWdu.get(d.instance_id.toLowerCase());
+  if (wdu) return `Installato da WDU (${SOURCES[wdu.source] ?? wdu.source}, ${when(wdu.at)})`;
+  const inf = d.driver?.inf_name;
+  if (!inf) return "–";
+  if (/^oem\d+\.inf$/i.test(inf)) return "Pacchetto aggiuntivo";
+  return "Integrato in Windows";
+}
+
+const DRIVER_KEYS = {
+  name: (d) => (d.name ?? d.instance_id).toLowerCase(),
+  class: (d) => (d.class ?? "").toLowerCase(),
+  version: (d) => (d.driver?.version ?? "").split(".").map((n) => n.padStart(6, "0")).join("."),
+  date: (d) => d.driver?.date ?? "",
+  provider: (d) => (d.driver?.provider ?? "").toLowerCase(),
+  origin: (d) => origin(d).toLowerCase(),
+};
+
+async function loadDrivers() {
+  $("drivers-empty").textContent = "Lettura dei dispositivi…";
+  show("drivers-empty", devices === null);
+  try {
+    const [inventory, history] = await Promise.all([
+      call({ type: "devices" }),
+      call({ type: "history" }).catch(() => ({ records: [] })),
+    ]);
+    devices = inventory.devices;
+    installedByWdu = new Map();
+    for (const r of history.records) {
+      if (r.outcome !== "succeeded") continue;
+      for (const id of r.devices) installedByWdu.set(id.toLowerCase(), r);
+    }
+  } catch (err) {
+    $("drivers-empty").textContent = `Impossibile leggere i dispositivi: ${err.message ?? err}`;
+    show("drivers-empty", true);
+    return;
+  }
+  renderDrivers();
+}
+
+function renderDrivers() {
+  if (!devices) return;
+  const query = $("drivers-filter").value.trim().toLowerCase();
+  const hidden = $("drivers-hidden").checked;
+  const none = $("drivers-none").checked;
+  const rows = devices.filter((d) => {
+    if (!hidden && d.status.hidden) return false;
+    if (!none && !d.driver) return false;
+    if (!query) return true;
+    return [d.name, d.class, d.manufacturer, d.driver?.provider, d.driver?.version, d.driver?.inf_name, d.instance_id]
+      .some((v) => v && v.toLowerCase().includes(query));
+  });
+  const key = DRIVER_KEYS[driversSort.key];
+  rows.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0) * driversSort.dir);
+
+  for (const th of document.querySelectorAll("#tab-drivers th[data-sort]")) {
+    th.classList.toggle("asc", th.dataset.sort === driversSort.key && driversSort.dir > 0);
+    th.classList.toggle("desc", th.dataset.sort === driversSort.key && driversSort.dir < 0);
+  }
+  $("drivers-count").textContent = `${rows.length} di ${devices.length} dispositivi`;
+  $("drivers-empty").textContent = "Nessun dispositivo corrisponde ai filtri.";
+  show("drivers-empty", rows.length === 0);
+
+  $("drivers").replaceChildren(
+    ...rows.map((d) => {
+      const name = el("td");
+      name.append(d.name ?? d.instance_id);
+      if (d.status.problem_code) name.append(" ", el("span", `problema ${d.status.problem_code}`, "badge bad"));
+      if (d.manufacturer) name.append(el("span", d.manufacturer, "sub"));
+      const from = el("td", origin(d));
+      if (d.driver?.inf_name) from.append(el("span", d.driver.inf_name, "sub"));
+      const row = el("tr");
+      row.append(
+        name,
+        el("td", d.class ?? "–"),
+        el("td", d.driver?.version ?? "–", "nowrap"),
+        el("td", d.driver?.date ? new Date(d.driver.date).toLocaleDateString("it-IT") : "–", "nowrap"),
+        el("td", d.driver?.provider ?? "–"),
+        from,
+      );
+      return row;
+    }),
+  );
+}
+
+for (const th of document.querySelectorAll("#tab-drivers th[data-sort]")) {
+  th.addEventListener("click", () => {
+    const key = th.dataset.sort;
+    driversSort = { key, dir: driversSort.key === key ? -driversSort.dir : 1 };
+    renderDrivers();
+  });
+}
+$("drivers-filter").addEventListener("input", renderDrivers);
+$("drivers-hidden").addEventListener("change", renderDrivers);
+$("drivers-none").addEventListener("change", renderDrivers);
+$("drivers-refresh").addEventListener("click", loadDrivers);
 
 // --- history ----------------------------------------------------------------
 
@@ -292,7 +399,8 @@ $("install").addEventListener("click", async () => {
 for (const tab of document.querySelectorAll(".tab")) {
   tab.addEventListener("click", () => {
     for (const t of document.querySelectorAll(".tab")) t.classList.toggle("active", t === tab);
-    for (const name of ["updates", "history", "settings"]) show(`tab-${name}`, tab.dataset.tab === name);
+    for (const name of ["updates", "drivers", "history", "settings"]) show(`tab-${name}`, tab.dataset.tab === name);
+    if (tab.dataset.tab === "drivers") loadDrivers();
     if (tab.dataset.tab === "history") loadHistory();
     if (tab.dataset.tab === "settings") loadSettings();
   });

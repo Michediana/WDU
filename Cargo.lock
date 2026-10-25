@@ -4558,6 +4558,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wdu-core",
+ "windows",
  "windows-service",
 ]
 
@@ -4568,6 +4569,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "wdu-core",
+ "windows",
 ]
 
 [[package]]

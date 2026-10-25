@@ -30,6 +30,7 @@ use windows::core::HSTRING;
 use crate::engine::ScanResult;
 use crate::history::HistoryRecord;
 use crate::matching::Policy;
+use crate::model::Device;
 
 pub const PIPE_NAME: &str = r"\\.\pipe\wdu";
 /// Bumped on every incompatible change to [`Request`] or [`Response`].
@@ -58,6 +59,8 @@ pub enum Request {
         ids: Vec<String>,
     },
     History,
+    /// Present devices and their installed drivers.
+    Devices,
     GetConfig,
     SetConfig {
         config: ServiceConfig,
@@ -71,6 +74,7 @@ pub enum Response {
     Status { status: ServiceStatus },
     Plan { scan: Option<Box<ScanResult>> },
     History { records: Vec<HistoryRecord> },
+    Devices { devices: Vec<Device> },
     Config { config: ServiceConfig },
     Accepted,
     Error { message: String },

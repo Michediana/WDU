@@ -128,11 +128,21 @@ th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--bord
 th { color: var(--muted); font-weight: 600; }
 td.detail { color: var(--muted); max-width: 420px; overflow-wrap: anywhere; }
 
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+.toolbar label.check { display: flex; gap: 6px; align-items: center; }
+.toolbar #drivers-refresh { margin-left: auto; }
+input[type=search] { width: 280px; }
+table.sortable th { cursor: pointer; user-select: none; white-space: nowrap; }
+table.sortable th.asc::after { content: " ▲"; font-size: 10px; }
+table.sortable th.desc::after { content: " ▼"; font-size: 10px; }
+td.nowrap { white-space: nowrap; }
+td .sub { display: block; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+
 form { display: grid; gap: 14px; max-width: 640px; }
 form label { display: grid; gap: 4px; }
 form label.check { display: flex; gap: 8px; align-items: flex-start; }
 form small { color: var(--muted); }
-input[type=text], input[type=number] {
+input[type=text], input[type=number], input[type=search] {
   font: inherit;
   padding: 6px 8px;
   border-radius: 6px;

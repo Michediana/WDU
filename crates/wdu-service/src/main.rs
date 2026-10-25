@@ -43,7 +43,12 @@ enum Command {
     /// Stop and remove the service (administrator).
     Uninstall,
     /// Run in this console instead of as a service, for development.
-    Run,
+    Run {
+        /// Stop when this process exits (the UI that started us); logs go to
+        /// a file, since the console is hidden.
+        #[arg(long, hide = true)]
+        parent: Option<u32>,
+    },
     /// Entry point used by the Service Control Manager.
     #[command(hide = true)]
     Service,
@@ -53,9 +58,17 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Install => install(),
         Command::Uninstall => uninstall(),
-        Command::Run => {
-            init_logging(None)?;
+        Command::Run { parent } => {
             let stop = Arc::new(AtomicBool::new(false));
+            match parent {
+                Some(pid) => {
+                    init_logging(Some(
+                        &engine::data_dir().join("logs").join("service-ui.log"),
+                    ))?;
+                    stop_with_parent(pid, stop.clone())?;
+                }
+                None => init_logging(None)?,
+            }
             run(stop)
         }
         Command::Service => {
@@ -71,6 +84,30 @@ fn run(stop: Arc<AtomicBool>) -> Result<()> {
     let service = Service::start(engine::data_dir(), stop.clone())?;
     tracing::info!(pipe = ipc::PIPE_NAME, "listening");
     ipc::serve(move |request| service.handle(request), stop)
+}
+
+/// Sets `stop` and wakes the pipe once process `pid` exits.
+fn stop_with_parent(pid: u32, stop: Arc<AtomicBool>) -> Result<()> {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::Threading::{
+        INFINITE, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    };
+
+    let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }
+        .with_context(|| format!("cannot open parent process {pid}"))?;
+    // HANDLE is not Send.
+    let raw = process.0 as usize;
+    std::thread::spawn(move || {
+        let process = HANDLE(raw as *mut _);
+        unsafe {
+            WaitForSingleObject(process, INFINITE);
+            let _ = CloseHandle(process);
+        }
+        tracing::info!(pid, "parent exited, stopping");
+        stop.store(true, Ordering::SeqCst);
+        ipc::wake(ipc::PIPE_NAME);
+    });
+    Ok(())
 }
 
 fn init_logging(file: Option<&Path>) -> Result<()> {
