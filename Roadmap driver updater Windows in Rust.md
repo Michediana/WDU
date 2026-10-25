@@ -49,18 +49,18 @@ Otto fasi in sequenza: prima si eliminano i rischi tecnici con un prototipo a ri
 
 ### Fase 0 — Spike tecnici
 
-- [ ] Chiamare WUA da Rust via COM: `IUpdateSession` → `IUpdateSearcher.Search` con criterio `IsInstalled=0 and Type='Driver'`, stampando titolo, hardware ID e data versione di ogni risultato (`IWindowsDriverUpdate`)
-- [ ] Enumerare i dispositivi con `SetupDiGetClassDevs` e leggere hardware ID, versione e data del driver dalle device property
-- [ ] Leggere produttore, modello e identificativo macchina da WMI/SMBIOS
-- [ ] Scaricare e parsare un catalogo per ciascuna marca
+- [x] Chiamare WUA da Rust via COM: `IUpdateSession` → `IUpdateSearcher.Search` con criterio `IsInstalled=0 and Type='Driver'`, stampando titolo, hardware ID e data versione di ogni risultato (`IWindowsDriverUpdate`)
+- [x] Enumerare i dispositivi con `SetupDiGetClassDevs` e leggere hardware ID, versione e data del driver dalle device property
+- [x] Leggere produttore, modello e identificativo macchina da WMI/SMBIOS
+- [x] Scaricare e parsare un catalogo per ciascuna marca
 
 Fatto quando: su tre PC reali, uno per marca, un CLI elenca dispositivi, driver disponibili su Windows Update e voci del catalogo OEM per quel modello.
 
 ### Fase 1 — Inventario
 
-- [ ] Modello dati `Device`: instance ID, hardware ID e compatible ID, classe, provider, versione, data, nome INF
-- [ ] Snapshot serializzabile in JSON, utile per test e diagnostica
-- [ ] Test su VM con hardware virtuale noto
+- [x] Modello dati `Device`: instance ID, hardware ID e compatible ID, classe, provider, versione, data, nome INF
+- [x] Snapshot serializzabile in JSON, utile per test e diagnostica
+- [ ] Test su VM con hardware virtuale noto (test pronto: `WDU_EXPECT_VM=hyperv cargo test -- --ignored`, da eseguire in una VM Hyper-V gen 2)
 
 Fatto quando: l'inventario coincide con quanto mostra Gestione dispositivi.
 

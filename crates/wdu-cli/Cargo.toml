@@ -1,0 +1,19 @@
+[package]
+name = "wdu-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "wdu"
+path = "src/main.rs"
+
+[dependencies]
+wdu-core.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
