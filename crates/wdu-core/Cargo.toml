@@ -18,6 +18,8 @@ tracing.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 wmi.workspace = true
+# Needed by the `implement` macro for COM callbacks.
+windows-core.workspace = true
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Devices_DeviceAndDriverInstallation",
@@ -27,4 +29,9 @@ windows = { workspace = true, features = [
     "Win32_System_Variant",
     "Win32_System_UpdateAgent",
     "Win32_System_Registry",
+    "Win32_Security_Cryptography",
+    "Win32_Security_Cryptography_Catalog",
+    "Win32_Security_Cryptography_Sip",
+    "Win32_Security_WinTrust",
+    "Win32_UI_Shell",
 ] }

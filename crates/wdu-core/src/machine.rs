@@ -4,8 +4,6 @@
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
-use windows::core::w;
 use wmi::WMIConnection;
 
 use crate::model::{MachineInfo, OsInfo};
@@ -104,21 +102,8 @@ pub fn read_machine_info() -> Result<MachineInfo> {
 
 /// `DisplayVersion` (e.g. `24H2`) is not exposed by WMI, only by the registry.
 fn read_display_version() -> Option<String> {
-    let mut buf = [0u16; 64];
-    let mut size = size_of_val(&buf) as u32;
-    unsafe {
-        RegGetValueW(
-            HKEY_LOCAL_MACHINE,
-            w!(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion"),
-            w!("DisplayVersion"),
-            RRF_RT_REG_SZ,
-            None,
-            Some(buf.as_mut_ptr().cast()),
-            Some(&mut size),
-        )
-    }
-    .ok()
-    .ok()?;
-    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-    clean(Some(String::from_utf16_lossy(&buf[..len])))
+    clean(crate::registry::read_string(
+        r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+        "DisplayVersion",
+    ))
 }

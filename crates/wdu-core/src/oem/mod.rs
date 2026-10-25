@@ -1,30 +1,26 @@
-//! OEM driver catalogs (Dell, HP, Lenovo): download and parsing.
+//! OEM driver catalogs (Dell, HP, Lenovo): download, parsing and providers.
 //!
-//! Each brand publishes its own format; every parser maps it to [`CatalogEntry`].
+//! Each brand publishes its own format; every parser maps it to [`CatalogEntry`],
+//! and [`Catalog::candidates`] turns entries into the common [`Candidate`].
 
 pub mod dell;
 pub mod hp;
+mod http;
 pub mod lenovo;
 pub mod xml;
 
+use std::fs;
 use std::io::{Cursor, Read};
-use std::time::Duration;
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::model::Brand;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum EntryKind {
-    Driver,
-    Bios,
-    Firmware,
-    Application,
-    Other,
-}
+pub use self::http::{ALLOWED_HOSTS, Http};
+use crate::model::{Brand, DriverVersion};
+pub use crate::provider::EntryKind;
+use crate::provider::{Candidate, Package, Provider, Source};
 
 /// One downloadable package from an OEM catalog.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -32,7 +28,11 @@ pub struct CatalogEntry {
     /// Release ID (Dell), SoftPaq number (HP) or package ID (Lenovo).
     pub id: String,
     pub name: String,
+    /// Package version, in the OEM's own notation.
     pub version: Option<String>,
+    /// `DriverVer` version of the driver inside, when the catalog makes it known.
+    #[serde(default)]
+    pub driver_version: Option<String>,
     pub kind: EntryKind,
     pub category: Option<String>,
     /// `YYYY-MM-DD`
@@ -46,6 +46,49 @@ pub struct CatalogEntry {
     /// OS identifiers in the OEM's own notation.
     pub os: Vec<String>,
     pub silent_install: Option<String>,
+}
+
+impl CatalogEntry {
+    /// OS codes differ per brand (`W11AP`, `W11_24H2`, `WIN11`); entries whose
+    /// codes are all unrecognised are kept rather than silently dropped.
+    pub fn supports_os(&self, windows11: bool) -> bool {
+        let codes: Vec<String> = self.os.iter().map(|o| o.to_ascii_uppercase()).collect();
+        let is =
+            |o: &str, v: &str| o.starts_with(&format!("W{v}")) || o.starts_with(&format!("WIN{v}"));
+        if !codes.iter().any(|o| is(o, "10") || is(o, "11")) {
+            return true;
+        }
+        let wanted = if windows11 { "11" } else { "10" };
+        codes.iter().any(|o| is(o, wanted))
+    }
+
+    pub fn to_candidate(&self, source: Source) -> Candidate {
+        Candidate {
+            source,
+            id: self.id.clone(),
+            title: self.name.clone(),
+            kind: self.kind,
+            hardware_ids: self.hardware_ids.clone(),
+            class: self.category.clone(),
+            provider: None,
+            model: None,
+            driver_version: self.driver_version.clone(),
+            driver_date: None,
+            release_date: self.release_date.clone(),
+            package: self.download_url.as_ref().map(|url| Package {
+                url: url.clone(),
+                size: self.size,
+                sha256: self.sha256.clone(),
+                silent_install: self.silent_install.clone(),
+            }),
+        }
+    }
+}
+
+/// Keeps a version only when it reads as a `DriverVer` version (`a.b.c.d`).
+pub(crate) fn as_driver_version(version: Option<&str>) -> Option<String> {
+    let v = version?.trim();
+    v.parse::<DriverVersion>().ok().map(|_| v.to_string())
 }
 
 /// What to look up: the brand, its machine identifier and the target OS.
@@ -70,6 +113,19 @@ pub struct Catalog {
     pub entries: Vec<CatalogEntry>,
 }
 
+impl Catalog {
+    /// Entries for the target OS, as candidates.
+    pub fn candidates(&self, windows11: bool) -> Result<Vec<Candidate>> {
+        let source = Source::try_from(self.brand)?;
+        Ok(self
+            .entries
+            .iter()
+            .filter(|e| e.supports_os(windows11))
+            .map(|e| e.to_candidate(source))
+            .collect())
+    }
+}
+
 pub fn fetch_catalog(http: &Http, query: &CatalogQuery) -> Result<Catalog> {
     match query.brand {
         Brand::Dell => dell::fetch(http, &query.system_id),
@@ -79,44 +135,14 @@ pub fn fetch_catalog(http: &Http, query: &CatalogQuery) -> Result<Catalog> {
     }
 }
 
-/// Hosts catalogs and packages may be downloaded from.
-pub const ALLOWED_HOSTS: &[&str] = &[
-    "downloads.dell.com",
-    "hpia.hpcloud.hp.com",
-    "ftp.hp.com",
-    "download.lenovo.com",
-];
-
-/// Blocking HTTPS client restricted to [`ALLOWED_HOSTS`].
-pub struct Http {
-    client: reqwest::blocking::Client,
-}
-
-impl Http {
-    pub fn new() -> Result<Self> {
-        let client = reqwest::blocking::Client::builder()
-            .user_agent(concat!("wdu/", env!("CARGO_PKG_VERSION")))
-            .https_only(true)
-            .timeout(Duration::from_secs(120))
-            .build()?;
-        Ok(Http { client })
-    }
-
-    pub fn get(&self, url: &str) -> Result<Vec<u8>> {
-        let parsed = reqwest::Url::parse(url).with_context(|| format!("invalid URL {url}"))?;
-        let host = parsed.host_str().unwrap_or_default();
-        if parsed.scheme() != "https" || !ALLOWED_HOSTS.contains(&host) {
-            bail!("refusing to download from non allow-listed URL {url}");
-        }
-        tracing::debug!(url, "GET");
-        let response = self
-            .client
-            .get(parsed)
-            .send()
-            .with_context(|| format!("GET {url} failed"))?
-            .error_for_status()?;
-        Ok(response.bytes()?.to_vec())
-    }
+/// The provider for the brand of `query`.
+pub fn provider(http: Http, query: CatalogQuery) -> Result<Box<dyn Provider>> {
+    Ok(match query.brand {
+        Brand::Dell => Box::new(dell::DellProvider { http, query }),
+        Brand::Hp => Box::new(hp::HpProvider { http, query }),
+        Brand::Lenovo => Box::new(lenovo::LenovoProvider { http, query }),
+        Brand::Other => bail!("no OEM catalog for this manufacturer"),
+    })
 }
 
 /// Extracts the only (or first) file of a cabinet; OEM catalog CABs hold one XML.
@@ -138,6 +164,56 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+pub fn sha256_file(path: &Path) -> Result<String> {
+    let mut file =
+        fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1 << 16];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
+}
+
+/// Extracts every file of a cabinet below `dest`, refusing paths that escape it.
+pub fn extract_cab_all(cab_path: &Path, dest: &Path) -> Result<Vec<PathBuf>> {
+    let file =
+        fs::File::open(cab_path).with_context(|| format!("cannot open {}", cab_path.display()))?;
+    let mut cabinet = cab::Cabinet::new(file).context("not a valid CAB file")?;
+    let names: Vec<String> = cabinet
+        .folder_entries()
+        .flat_map(|folder| folder.file_entries())
+        .map(|file| file.name().to_string())
+        .collect();
+    let mut out = Vec::with_capacity(names.len());
+    for name in names {
+        let relative = PathBuf::from(name.replace('\\', "/"));
+        if !relative
+            .components()
+            .all(|c| matches!(c, Component::Normal(_)))
+        {
+            bail!("CAB entry `{name}` escapes the extraction directory");
+        }
+        let target = dest.join(relative);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut reader = cabinet.read_file(&name)?;
+        let mut writer = fs::File::create(&target)?;
+        std::io::copy(&mut reader, &mut writer)?;
+        out.push(target);
+    }
+    Ok(out)
 }
 
 pub fn verify_sha256(bytes: &[u8], expected: &str, what: &str) -> Result<()> {
@@ -208,13 +284,41 @@ mod tests {
         assert!(verify_sha256(b"abd", "ba7816bf", "x").is_err());
     }
 
+    fn entry(os: &[&str]) -> CatalogEntry {
+        CatalogEntry {
+            id: "x".into(),
+            name: "x".into(),
+            version: Some("A10".into()),
+            driver_version: as_driver_version(Some("6.8.0.22")),
+            kind: EntryKind::Driver,
+            category: None,
+            release_date: Some("2024-01-01".into()),
+            download_url: Some("https://downloads.dell.com/x.exe".into()),
+            size: None,
+            sha256: None,
+            hardware_ids: vec!["PCI\\VEN_8086&DEV_7360".into()],
+            os: os.iter().map(|s| s.to_string()).collect(),
+            silent_install: None,
+        }
+    }
+
     #[test]
-    fn http_rejects_foreign_hosts() {
-        let http = Http::new().unwrap();
-        assert!(http.get("https://example.com/catalog.cab").is_err());
-        assert!(
-            http.get("http://downloads.dell.com/catalog/CatalogIndexPC.cab")
-                .is_err()
-        );
+    fn os_filter_per_brand_notation() {
+        assert!(entry(&["W10P4", "W11AP"]).supports_os(true));
+        assert!(!entry(&["W10P4"]).supports_os(true));
+        assert!(entry(&["W11_24H2"]).supports_os(true));
+        assert!(!entry(&["WIN11"]).supports_os(false));
+        // Unknown notation: kept.
+        assert!(entry(&["WT64A"]).supports_os(true));
+        assert!(entry(&[]).supports_os(false));
+    }
+
+    #[test]
+    fn entry_to_candidate() {
+        let c = entry(&[]).to_candidate(Source::Dell);
+        assert_eq!(c.driver_version.as_deref(), Some("6.8.0.22"));
+        assert_eq!(c.driver_date, None);
+        assert_eq!(c.package.unwrap().url, "https://downloads.dell.com/x.exe");
+        assert_eq!(as_driver_version(Some("A10")), None);
     }
 }

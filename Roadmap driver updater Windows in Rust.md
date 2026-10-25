@@ -66,12 +66,14 @@ Fatto quando: l'inventario coincide con quanto mostra Gestione dispositivi.
 
 ### Fase 2 — Provider Windows Update
 
-- [ ] Ricerca e mappatura di ogni `IUpdate` in un candidato comune (hardware ID, modello, provider, classe, data)
-- [ ] Download e installazione con `IUpdateDownloader` e `IUpdateInstaller`, gestendo l'eventuale riavvio richiesto
-- [ ] Ricerca su un thread dedicato con timeout: WUA è lento e bloccante
-- [ ] Rilevare quando una policy aziendale esclude i driver da Windows Update e segnalarlo
+- [x] Ricerca e mappatura di ogni `IUpdate` in un candidato comune (hardware ID, modello, provider, classe, data)
+- [x] Download e installazione con `IUpdateDownloader` e `IUpdateInstaller`, gestendo l'eventuale riavvio richiesto
+- [x] Ricerca su un thread dedicato con timeout: WUA è lento e bloccante
+- [x] Rilevare quando una policy aziendale esclude i driver da Windows Update e segnalarlo
 
 Fatto quando: su VM installa un driver da Windows Update e registra l'esito.
+
+Stato: implementato (`wdu wu-install`, `wdu update --only`, storico in `%ProgramData%\WDU\history.jsonl`); la ricerca asincrona è verificata su PC reale, l'installazione va ancora provata su VM con un driver applicabile.
 
 ### Fase 3 — Provider cataloghi OEM
 
@@ -83,22 +85,26 @@ Ogni marca identifica la macchina in modo diverso e pubblica un formato diverso.
 | HP | Platform ID della scheda madre | File di riferimento XML per piattaforma e versione di Windows | HP Image Assistant |
 | Lenovo | Machine type (primi 4 caratteri del modello) | XML per machine type, più un descrittore XML per pacchetto | Lenovo System Update |
 
-- [ ] Trait `Provider` comune, un'implementazione per marca
-- [ ] Cache dei cataloghi con ETag e Last-Modified
-- [ ] Verifica dell'hash dichiarato nel catalogo e della firma Authenticode del pacchetto
-- [ ] Strategia di installazione: estrarre l'INF e installarlo via PnP quando possibile, altrimenti lanciare l'installer del produttore con i suoi switch silenziosi
+- [x] Trait `Provider` comune, un'implementazione per marca
+- [x] Cache dei cataloghi con ETag e Last-Modified
+- [x] Verifica dell'hash dichiarato nel catalogo e della firma Authenticode del pacchetto
+- [x] Strategia di installazione: estrarre l'INF e installarlo via PnP quando possibile, altrimenti lanciare l'installer del produttore con i suoi switch silenziosi
 
 Fatto quando: per ogni marca, su un modello reale, la lista proposta coincide con quella dell'app ufficiale.
 
+Stato: implementato; hash e firma verificati su un pacchetto reale per marca (firmatari `Dell Technologies Inc.`, `HP Inc.`, `Lenovo`). L'INF si installa per ora con `pnputil /add-driver /install`, sostituito in fase 5. Estrazione e installer silenziosi vanno provati su modelli reali con privilegi di amministratore, e il confronto con le app ufficiali resta da fare.
+
 ### Fase 4 — Matching e policy
 
-- [ ] Confronto per hardware ID, dal più specifico al più generico
-- [ ] Confronto della versione a quattro parti presa da `DriverVer`, poi della data
-- [ ] Priorità: catalogo OEM prima di Windows Update; mai downgrade
-- [ ] Allow list e deny list per classe di dispositivo
-- [ ] Modalità dry-run che mostra cosa farebbe senza installare
+- [x] Confronto per hardware ID, dal più specifico al più generico
+- [x] Confronto della versione a quattro parti presa da `DriverVer`, poi della data
+- [x] Priorità: catalogo OEM prima di Windows Update; mai downgrade
+- [x] Allow list e deny list per classe di dispositivo
+- [x] Modalità dry-run che mostra cosa farebbe senza installare
 
 Fatto quando: il dry-run sul parco di prova non produce falsi positivi noti.
+
+Stato: implementato (`wdu update`, policy JSON con `--policy`). Il dry-run va eseguito sul parco di prova.
 
 ### Fase 5 — Installazione sicura
 

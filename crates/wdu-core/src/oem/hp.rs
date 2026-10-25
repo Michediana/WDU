@@ -5,8 +5,11 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 
 use super::xml::{Element, decode_text};
-use super::{Catalog, CatalogEntry, CatalogQuery, EntryKind, Http, extract_single_cab};
+use super::{
+    Catalog, CatalogEntry, CatalogQuery, EntryKind, Http, as_driver_version, extract_single_cab,
+};
 use crate::model::Brand;
+use crate::provider::{Candidate, Provider, Source};
 
 pub const PLATFORM_LIST_URL: &str = "https://hpia.hpcloud.hp.com/ref/platformList.cab";
 pub const REFERENCE_BASE_URL: &str = "https://hpia.hpcloud.hp.com/ref/";
@@ -140,6 +143,7 @@ pub fn parse_reference(xml: &str) -> Result<Vec<CatalogEntry>> {
             Some(CatalogEntry {
                 name: u.text_at(&["Name"]).unwrap_or_default(),
                 version: u.text_at(&["Version"]),
+                driver_version: as_driver_version(u.text_at(&["Version"]).as_deref()),
                 kind: kind_of(category.as_deref().unwrap_or_default()),
                 category,
                 release_date: u.text_at(&["DateReleased"]),
@@ -207,6 +211,22 @@ pub fn fetch(http: &Http, query: &CatalogQuery) -> Result<Catalog> {
         source_url: url,
         entries,
     })
+}
+
+/// [`Provider`] over the Hp catalog of one platform ID.
+pub struct HpProvider {
+    pub http: Http,
+    pub query: CatalogQuery,
+}
+
+impl Provider for HpProvider {
+    fn source(&self) -> Source {
+        Source::Hp
+    }
+
+    fn candidates(&self) -> Result<Vec<Candidate>> {
+        fetch(&self.http, &self.query)?.candidates(self.query.windows11)
+    }
 }
 
 #[cfg(test)]

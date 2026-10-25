@@ -1,13 +1,18 @@
-//! `wdu`: command line prototype for inventory, Windows Update and OEM catalogs.
+//! `wdu`: command line prototype for inventory, Windows Update, OEM catalogs,
+//! matching and installation.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
+use wdu_core::history::{History, HistoryRecord, Outcome};
+use wdu_core::matching::{self, Plan, Policy, Proposal};
 use wdu_core::model::{Brand, Device, MachineInfo, Snapshot};
 use wdu_core::oem::{self, Catalog, CatalogQuery, EntryKind, Http};
-use wdu_core::{inventory, machine, wua};
+use wdu_core::provider::{Candidate, Provider, Source};
+use wdu_core::{install, inventory, machine, trust, wua};
 
 #[derive(Parser)]
 #[command(name = "wdu", version, about = "Windows driver updater prototype")]
@@ -15,6 +20,10 @@ struct Cli {
     /// More logging (-v info, -vv debug); RUST_LOG overrides it.
     #[arg(short, long, global = true, action = clap::ArgAction::Count)]
     verbose: u8,
+
+    /// Always download catalogs again instead of revalidating the local cache.
+    #[arg(long, global = true)]
+    no_cache: bool,
 
     #[command(subcommand)]
     command: Command,
@@ -47,8 +56,22 @@ enum Command {
     Wu {
         #[arg(long, default_value = wua::DEFAULT_DRIVER_CRITERIA)]
         criteria: String,
+        #[command(flatten)]
+        timeout: SearchTimeout,
         #[arg(long)]
         json: bool,
+    },
+    /// Policies (GPO, MDM, WSUS) that limit driver updates.
+    WuPolicy {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Download and install Windows Update drivers by update ID (needs administrator).
+    WuInstall {
+        #[arg(required = true)]
+        update_ids: Vec<String>,
+        #[command(flatten)]
+        timeout: SearchTimeout,
     },
     /// Entries of the OEM catalog for this machine, or for another model.
     Catalog {
@@ -60,6 +83,16 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Match updates to devices and show what would be installed; with
+    /// --all or --only, install it (needs administrator).
+    Update(UpdateArgs),
+    /// Past installations and their outcome.
+    History {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check the Authenticode signature of a file.
+    Verify { path: PathBuf },
     /// Devices, Windows Update drivers and OEM catalog in one pass.
     Report {
         #[command(flatten)]
@@ -67,6 +100,8 @@ enum Command {
         /// Skip the Windows Update search.
         #[arg(long)]
         no_wu: bool,
+        #[command(flatten)]
+        timeout: SearchTimeout,
         /// Write the full report as JSON.
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -105,6 +140,51 @@ struct CatalogTarget {
     resolve: bool,
 }
 
+#[derive(Args, Clone, Copy)]
+struct SearchTimeout {
+    /// Abort the Windows Update search after this many seconds.
+    #[arg(long = "wu-timeout", default_value_t = wua::DEFAULT_SEARCH_TIMEOUT.as_secs())]
+    secs: u64,
+}
+
+impl SearchTimeout {
+    fn duration(self) -> Duration {
+        Duration::from_secs(self.secs)
+    }
+}
+
+#[derive(Args)]
+struct UpdateArgs {
+    #[command(flatten)]
+    target: CatalogTarget,
+    /// Policy file (JSON): allow_classes, deny_classes, oem_exclusive.
+    #[arg(long)]
+    policy: Option<PathBuf>,
+    /// Skip Windows Update.
+    #[arg(long)]
+    no_wu: bool,
+    /// Skip the OEM catalog.
+    #[arg(long)]
+    no_oem: bool,
+    #[command(flatten)]
+    timeout: SearchTimeout,
+    /// Never install, even with --all or --only.
+    #[arg(long)]
+    dry_run: bool,
+    /// Install every proposed update.
+    #[arg(long, conflicts_with = "only")]
+    all: bool,
+    /// Install only these proposals (Windows Update ID or OEM package ID).
+    #[arg(long, num_args = 1..)]
+    only: Vec<String>,
+    /// List every skipped candidate, not only the counts.
+    #[arg(long)]
+    skipped: bool,
+    /// Print the plan as JSON.
+    #[arg(long)]
+    json: bool,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let level = match cli.verbose {
@@ -118,6 +198,14 @@ fn main() -> Result<()> {
         )
         .with_writer(std::io::stderr)
         .init();
+    let http = || -> Result<Http> {
+        let http = Http::new()?;
+        Ok(if cli.no_cache {
+            http
+        } else {
+            http.with_cache(user_dir().join("cache"))
+        })
+    };
 
     match cli.command {
         Command::Machine { json } => {
@@ -143,13 +231,52 @@ fn main() -> Result<()> {
             let snapshot = Snapshot::new(Some(machine::read_machine_info()?), devices);
             write_output(output.as_deref(), &snapshot.to_json()?)?;
         }
-        Command::Wu { criteria, json } => {
-            let updates = wua::search_driver_updates(&criteria)?;
+        Command::Wu {
+            criteria,
+            timeout,
+            json,
+        } => {
+            let policy = wua::read_update_policy();
+            for finding in &policy.findings {
+                eprintln!("policy: {finding}");
+            }
+            let updates = wua::search_driver_updates(&criteria, timeout.duration())?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&updates)?);
             } else {
                 print_wu(&updates);
             }
+        }
+        Command::WuPolicy { json } => {
+            let policy = wua::read_update_policy();
+            if json {
+                println!("{}", serde_json::to_string_pretty(&policy)?);
+            } else if policy.findings.is_empty() {
+                println!("No policy limits driver updates.");
+            } else {
+                for finding in &policy.findings {
+                    println!("- {finding}");
+                }
+            }
+        }
+        Command::WuInstall {
+            update_ids,
+            timeout,
+        } => {
+            require_elevation()?;
+            let history = history();
+            let results = wua::install_driver_updates(&update_ids, timeout.duration())?;
+            let mut reboot = false;
+            for r in &results {
+                let title = r.title.as_deref().unwrap_or(&r.update_id);
+                let mut record =
+                    HistoryRecord::new(Source::WindowsUpdate, &r.update_id, title, vec![]);
+                fill_wu_record(&mut record, r);
+                reboot |= r.reboot_required;
+                print_record(&record);
+                append(&history, &record);
+            }
+            print_reboot_notice(reboot);
         }
         Command::Catalog {
             target,
@@ -157,18 +284,73 @@ fn main() -> Result<()> {
             json,
         } => {
             let info = machine::read_machine_info()?;
-            let catalog = fetch_catalog(&info, &target)?;
+            let catalog = fetch_catalog(&http()?, &info, &target)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&catalog)?);
             } else {
                 print_catalog(&catalog, all_kinds);
             }
         }
+        Command::Update(args) => update(&http()?, &args)?,
+        Command::History { json } => {
+            let records = history().read()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&records)?);
+            } else if records.is_empty() {
+                println!("No installations recorded.");
+            } else {
+                records.iter().for_each(print_record);
+            }
+        }
+        Command::Verify { path } => {
+            let signature = trust::verify_file(&path)?;
+            println!(
+                "valid signature, signer: {}",
+                signature.signer.as_deref().unwrap_or("-")
+            );
+        }
         Command::Report {
             target,
             no_wu,
+            timeout,
             output,
-        } => report(&target, no_wu, output.as_deref())?,
+        } => report(&http()?, &target, no_wu, timeout, output.as_deref())?,
+    }
+    Ok(())
+}
+
+/// Per-user data: the catalog cache.
+fn user_dir() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("WDU")
+}
+
+/// Machine-wide data: history and downloaded packages.
+fn machine_dir() -> PathBuf {
+    std::env::var_os("ProgramData")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
+        .join("WDU")
+}
+
+fn history() -> History {
+    History::new(machine_dir().join("history.jsonl"))
+}
+
+fn append(history: &History, record: &HistoryRecord) {
+    if let Err(err) = history.append(record) {
+        eprintln!(
+            "warning: cannot record in {}: {err:#}",
+            history.path().display()
+        );
+    }
+}
+
+fn require_elevation() -> Result<()> {
+    if !install::is_elevated() {
+        bail!("installing drivers needs administrator rights: run from an elevated prompt");
     }
     Ok(())
 }
@@ -218,10 +400,211 @@ fn catalog_query(info: &MachineInfo, target: &CatalogTarget) -> Result<CatalogQu
     })
 }
 
-fn fetch_catalog(info: &MachineInfo, target: &CatalogTarget) -> Result<Catalog> {
+fn fetch_catalog(http: &Http, info: &MachineInfo, target: &CatalogTarget) -> Result<Catalog> {
     let query = catalog_query(info, target)?;
     tracing::info!(brand = %query.brand, id = %query.system_id, "fetching OEM catalog");
-    oem::fetch_catalog(&Http::new()?, &query)
+    oem::fetch_catalog(http, &query)
+}
+
+#[derive(serde::Serialize)]
+struct SourceError {
+    source: String,
+    error: String,
+}
+
+#[derive(serde::Serialize)]
+struct UpdateReport<'a> {
+    plan: &'a Plan,
+    source_errors: &'a [SourceError],
+    policy: wua::UpdatePolicy,
+}
+
+fn update(http: &Http, args: &UpdateArgs) -> Result<()> {
+    let policy = match &args.policy {
+        Some(path) => Policy::from_json(
+            &std::fs::read_to_string(path)
+                .with_context(|| format!("cannot read {}", path.display()))?,
+        )
+        .with_context(|| format!("invalid policy {}", path.display()))?,
+        None => Policy::default(),
+    };
+    let info = machine::read_machine_info()?;
+    let devices = inventory::enumerate_devices(Default::default())?;
+
+    // OEM first: it is fast, and it is the preferred source.
+    let mut providers: Vec<Box<dyn Provider>> = Vec::new();
+    let mut errors = Vec::new();
+    if !args.no_oem {
+        match catalog_query(&info, &args.target).and_then(|q| oem::provider(http.clone(), q)) {
+            Ok(provider) => providers.push(provider),
+            Err(err) => errors.push(SourceError {
+                source: "oem".into(),
+                error: format!("{err:#}"),
+            }),
+        }
+    }
+    if !args.no_wu {
+        providers.push(Box::new(wua::WindowsUpdateProvider {
+            timeout: args.timeout.duration(),
+            ..Default::default()
+        }));
+    }
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for provider in &providers {
+        eprintln!("searching {} ...", provider.source());
+        match provider.candidates() {
+            Ok(found) => candidates.extend(found),
+            Err(err) => errors.push(SourceError {
+                source: provider.source().to_string(),
+                error: format!("{err:#}"),
+            }),
+        }
+    }
+
+    let plan = matching::plan(&devices, &candidates, &policy);
+    let wu_policy = wua::read_update_policy();
+    if args.json {
+        let report = UpdateReport {
+            plan: &plan,
+            source_errors: &errors,
+            policy: wu_policy.clone(),
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        for finding in &wu_policy.findings {
+            println!("policy: {finding}");
+        }
+        for e in &errors {
+            println!("{} unavailable: {}", e.source, e.error);
+        }
+        print_plan(&plan, args.skipped);
+    }
+
+    if args.dry_run || (!args.all && args.only.is_empty()) {
+        if !args.json && !args.dry_run && !plan.proposals.is_empty() {
+            println!();
+            println!("Dry run: nothing installed. Use --all or --only <ID> to install.");
+        }
+        return Ok(());
+    }
+
+    let selected: Vec<&Proposal> = if args.all {
+        plan.proposals.iter().collect()
+    } else {
+        let unknown: Vec<&String> = args
+            .only
+            .iter()
+            .filter(|id| {
+                !plan
+                    .proposals
+                    .iter()
+                    .any(|p| p.candidate.id.eq_ignore_ascii_case(id))
+            })
+            .collect();
+        if !unknown.is_empty() {
+            bail!("not among the proposed updates: {unknown:?}");
+        }
+        plan.proposals
+            .iter()
+            .filter(|p| {
+                args.only
+                    .iter()
+                    .any(|id| p.candidate.id.eq_ignore_ascii_case(id))
+            })
+            .collect()
+    };
+    if selected.is_empty() {
+        return Ok(());
+    }
+    require_elevation()?;
+    if wu_policy.device_install_restricted {
+        println!("warning: device installation restrictions may refuse these drivers");
+    }
+    println!();
+    install_proposals(http, &selected, args.timeout.duration())
+}
+
+fn install_proposals(http: &Http, selected: &[&Proposal], timeout: Duration) -> Result<()> {
+    let history = history();
+    let packages = machine_dir().join("packages");
+    let new_record = |p: &Proposal| {
+        HistoryRecord::new(
+            p.candidate.source,
+            &p.candidate.id,
+            &p.candidate.title,
+            p.devices.iter().map(|d| d.instance_id.clone()).collect(),
+        )
+    };
+    let mut reboot = false;
+
+    let (wu, oem): (Vec<&Proposal>, Vec<&Proposal>) = selected
+        .iter()
+        .partition(|p| p.candidate.source == Source::WindowsUpdate);
+
+    for p in oem {
+        println!(
+            "installing [{}] {} {}",
+            p.candidate.source, p.candidate.id, p.candidate.title
+        );
+        let hardware_ids: Vec<String> = p
+            .devices
+            .iter()
+            .flat_map(|d| d.hardware_ids.iter().cloned())
+            .collect();
+        let mut record = new_record(p);
+        match install::install_package(http, &p.candidate, &hardware_ids, &packages) {
+            Ok(outcome) => {
+                record.outcome = Outcome::Succeeded;
+                record.reboot_required = outcome.reboot_required;
+                record.detail = Some(serde_json::to_string(&outcome.method)?);
+            }
+            Err(err) => record.detail = Some(format!("{err:#}")),
+        }
+        reboot |= record.reboot_required;
+        print_record(&record);
+        append(&history, &record);
+    }
+
+    if !wu.is_empty() {
+        println!("installing {} update(s) from Windows Update", wu.len());
+        let ids: Vec<String> = wu.iter().map(|p| p.candidate.id.clone()).collect();
+        let results = wua::install_driver_updates(&ids, timeout);
+        for p in wu {
+            let mut record = new_record(p);
+            match &results {
+                Ok(results) => match results
+                    .iter()
+                    .find(|r| r.update_id.eq_ignore_ascii_case(&p.candidate.id))
+                {
+                    Some(r) => fill_wu_record(&mut record, r),
+                    None => record.detail = Some("no result from Windows Update".into()),
+                },
+                Err(err) => record.detail = Some(format!("{err:#}")),
+            }
+            reboot |= record.reboot_required;
+            print_record(&record);
+            append(&history, &record);
+        }
+    }
+    print_reboot_notice(reboot);
+    Ok(())
+}
+
+fn fill_wu_record(record: &mut HistoryRecord, result: &wua::WuInstallResult) {
+    record.outcome = if result.succeeded() {
+        Outcome::Succeeded
+    } else {
+        Outcome::Failed
+    };
+    record.reboot_required = result.reboot_required;
+    record.detail = result.error.clone();
+}
+
+fn print_reboot_notice(reboot: bool) {
+    if reboot {
+        println!();
+        println!("A restart is required to complete the installation. Restart when convenient.");
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -233,7 +616,13 @@ struct Report {
     catalog_error: Option<String>,
 }
 
-fn report(target: &CatalogTarget, no_wu: bool, output: Option<&std::path::Path>) -> Result<()> {
+fn report(
+    http: &Http,
+    target: &CatalogTarget,
+    no_wu: bool,
+    timeout: SearchTimeout,
+    output: Option<&Path>,
+) -> Result<()> {
     let info = machine::read_machine_info()?;
     print_machine(&info);
 
@@ -250,7 +639,7 @@ fn report(target: &CatalogTarget, no_wu: bool, output: Option<&std::path::Path>)
     } else {
         println!();
         println!("== Windows Update drivers");
-        match wua::search_driver_updates(wua::DEFAULT_DRIVER_CRITERIA) {
+        match wua::search_driver_updates(wua::DEFAULT_DRIVER_CRITERIA, timeout.duration()) {
             Ok(updates) => {
                 print_wu(&updates);
                 (Some(updates), None)
@@ -264,7 +653,7 @@ fn report(target: &CatalogTarget, no_wu: bool, output: Option<&std::path::Path>)
 
     println!();
     println!("== OEM catalog");
-    let (catalog, catalog_error) = match fetch_catalog(&info, target) {
+    let (catalog, catalog_error) = match fetch_catalog(http, &info, target) {
         Ok(catalog) => {
             print_catalog(&catalog, false);
             (Some(catalog), None)
@@ -289,7 +678,7 @@ fn report(target: &CatalogTarget, no_wu: bool, output: Option<&std::path::Path>)
     Ok(())
 }
 
-fn write_output(path: Option<&std::path::Path>, content: &str) -> Result<()> {
+fn write_output(path: Option<&Path>, content: &str) -> Result<()> {
     match path {
         Some(path) => {
             std::fs::write(path, content)
@@ -372,9 +761,11 @@ fn print_wu(updates: &[wua::WuDriverUpdate]) {
     for u in updates {
         println!("{}", u.title);
         println!(
-            "    hwid {}  class {}  date {}  provider {}",
+            "    id {}  hwid {}  class {}  version {}  date {}  provider {}",
+            u.update_id,
             or_dash(&u.hardware_id),
             or_dash(&u.driver_class),
+            or_dash(&u.driver_version),
             or_dash(&u.driver_date),
             or_dash(&u.provider)
         );
@@ -413,5 +804,63 @@ fn print_catalog(catalog: &Catalog, all_kinds: bool) {
             or_dash(&e.release_date),
             e.hardware_ids.len()
         );
+    }
+}
+
+fn print_plan(plan: &Plan, list_skipped: bool) {
+    println!();
+    println!("== Proposed updates ({})", plan.proposals.len());
+    for p in &plan.proposals {
+        let c = &p.candidate;
+        println!(
+            "[{}] {}  {}  {}",
+            c.source,
+            c.id,
+            c.title,
+            or_dash(&c.driver_version)
+        );
+        for d in &p.devices {
+            println!(
+                "    {} ({})  {} {} -> {:?}  via {}",
+                fit(or_dash(&d.name), 44),
+                or_dash(&d.class),
+                or_dash(&d.installed_version),
+                or_dash(&d.installed_date),
+                d.reason,
+                d.matched_id
+            );
+        }
+    }
+    if plan.proposals.is_empty() {
+        println!("Nothing to update.");
+    }
+    println!();
+    println!("== Skipped ({})", plan.skipped.len());
+    for (reason, count) in plan.skipped_by_reason() {
+        println!("    {count:>4}  {reason}");
+    }
+    if list_skipped {
+        for s in &plan.skipped {
+            println!(
+                "[{}] {}  {}  {}  {}",
+                s.source,
+                fit(&s.id, 38),
+                fit(&s.title, 48),
+                s.device.as_deref().unwrap_or("-"),
+                s.reason
+            );
+        }
+    }
+}
+
+fn print_record(r: &HistoryRecord) {
+    let outcome = match r.outcome {
+        Outcome::Succeeded if r.reboot_required => "ok, restart needed",
+        Outcome::Succeeded => "ok",
+        Outcome::Failed => "FAILED",
+    };
+    println!("{}  [{}] {}  {}  {outcome}", r.at, r.source, r.id, r.title);
+    if let Some(detail) = &r.detail {
+        println!("    {detail}");
     }
 }

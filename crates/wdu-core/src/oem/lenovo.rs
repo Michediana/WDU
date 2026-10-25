@@ -4,8 +4,9 @@
 use anyhow::{Context, Result};
 
 use super::xml::{Element, decode_text};
-use super::{Catalog, CatalogEntry, CatalogQuery, EntryKind, Http};
+use super::{Catalog, CatalogEntry, CatalogQuery, EntryKind, Http, as_driver_version};
 use crate::model::Brand;
+use crate::provider::{Candidate, Provider, Source};
 
 pub fn catalog_url(machine_type: &str, windows11: bool) -> String {
     let os = if windows11 { "Win11" } else { "Win10" };
@@ -40,6 +41,7 @@ impl PackageRef {
             name: id.clone(),
             id,
             version: None,
+            driver_version: None,
             kind: kind_of(self.category.as_deref().unwrap_or_default()),
             category: self.category.clone(),
             release_date: None,
@@ -120,6 +122,15 @@ pub fn parse_descriptor(xml: &str, package: &PackageRef) -> Result<CatalogEntry>
     ids.dedup();
     entry.hardware_ids = ids;
 
+    // `10.1.24.6^` means "this version or later is already installed": it is
+    // the version of the driver the package installs. Detection by file or
+    // registry version says nothing about DriverVer, so it is not used.
+    entry.driver_version = root
+        .descendants("_Driver")
+        .into_iter()
+        .find_map(|d| d.text_at(&["Version"]))
+        .and_then(|v| as_driver_version(v.split('^').map(str::trim).find(|s| !s.is_empty())));
+
     let mut os: Vec<String> = root
         .descendants("OS")
         .into_iter()
@@ -176,6 +187,27 @@ pub fn fetch(http: &Http, query: &CatalogQuery) -> Result<Catalog> {
         source_url: url,
         entries,
     })
+}
+
+/// [`Provider`] over the Lenovo catalog of one machine type.
+pub struct LenovoProvider {
+    pub http: Http,
+    pub query: CatalogQuery,
+}
+
+impl Provider for LenovoProvider {
+    fn source(&self) -> Source {
+        Source::Lenovo
+    }
+
+    fn candidates(&self) -> Result<Vec<Candidate>> {
+        // Hardware IDs and versions are only in the package descriptors.
+        let query = CatalogQuery {
+            resolve_packages: true,
+            ..self.query.clone()
+        };
+        fetch(&self.http, &query)?.candidates(query.windows11)
+    }
 }
 
 #[cfg(test)]
@@ -236,6 +268,7 @@ mod tests {
         let entry = parse_descriptor(DESCRIPTOR, &packages[0]).unwrap();
         assert_eq!(entry.name, "Intel Chipset Device Software");
         assert_eq!(entry.version.as_deref(), Some("10.1.18800.8277"));
+        assert_eq!(entry.driver_version.as_deref(), Some("10.1.24.6"));
         assert_eq!(entry.kind, EntryKind::Driver);
         assert_eq!(
             entry.download_url.as_deref(),

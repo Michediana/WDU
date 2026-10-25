@@ -4,10 +4,11 @@ use anyhow::{Context, Result};
 
 use super::xml::{Element, decode_text};
 use super::{
-    Catalog, CatalogEntry, EntryKind, Http, extract_single_cab, parse_month_name_date,
-    verify_sha256,
+    Catalog, CatalogEntry, CatalogQuery, EntryKind, Http, as_driver_version, extract_single_cab,
+    parse_month_name_date, verify_sha256,
 };
 use crate::model::Brand;
+use crate::provider::{Candidate, Provider, Source};
 
 pub const INDEX_URL: &str = "https://downloads.dell.com/catalog/CatalogIndexPC.cab";
 pub const BASE_URL: &str = "https://downloads.dell.com/";
@@ -77,6 +78,7 @@ fn parse_component(c: &Element) -> Option<CatalogEntry> {
         id: c.attr("releaseID")?.to_string(),
         name: c.text_at(&["Name", "Display"]).unwrap_or_default(),
         version: c.attr("vendorVersion").map(str::to_string),
+        driver_version: as_driver_version(c.attr("vendorVersion")),
         kind,
         category: c.text_at(&["Category", "Display"]),
         release_date: c.attr("releaseDate").and_then(parse_month_name_date),
@@ -150,6 +152,22 @@ pub fn fetch(http: &Http, system_id: &str) -> Result<Catalog> {
     })
 }
 
+/// [`Provider`] over the Dell catalog of one System ID.
+pub struct DellProvider {
+    pub http: Http,
+    pub query: CatalogQuery,
+}
+
+impl Provider for DellProvider {
+    fn source(&self) -> Source {
+        Source::Dell
+    }
+
+    fn candidates(&self) -> Result<Vec<Candidate>> {
+        fetch(&self.http, &self.query.system_id)?.candidates(self.query.windows11)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,6 +235,7 @@ mod tests {
         assert_eq!(wifi.id, "N88NY");
         assert_eq!(wifi.kind, EntryKind::Driver);
         assert_eq!(wifi.version.as_deref(), Some("6.8.0.22"));
+        assert_eq!(wifi.driver_version.as_deref(), Some("6.8.0.22"));
         assert_eq!(wifi.release_date.as_deref(), Some("2021-01-04"));
         assert_eq!(
             wifi.download_url.as_deref(),
