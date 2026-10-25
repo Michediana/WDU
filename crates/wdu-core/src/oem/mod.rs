@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub use self::http::{ALLOWED_HOSTS, Http};
-use crate::model::{Brand, DriverVersion};
+use crate::model::{Brand, DriverVersion, MachineInfo};
 pub use crate::provider::EntryKind;
 use crate::provider::{Candidate, Package, Provider, Source};
 
@@ -102,6 +102,28 @@ pub struct CatalogQuery {
     pub display_version: Option<String>,
     /// Lenovo only: also download each package descriptor (one request per package).
     pub resolve_packages: bool,
+}
+
+impl CatalogQuery {
+    /// The catalog of `machine`, for the Windows it runs.
+    pub fn for_machine(machine: &MachineInfo) -> Result<Self> {
+        let brand = machine.brand();
+        if brand == Brand::Other {
+            bail!(
+                "manufacturer `{}` has no supported OEM catalog",
+                machine.manufacturer
+            );
+        }
+        Ok(CatalogQuery {
+            brand,
+            system_id: machine
+                .oem_system_id()
+                .context("cannot determine the OEM system identifier of this machine")?,
+            windows11: machine.os.is_windows11(),
+            display_version: machine.os.display_version.clone(),
+            resolve_packages: false,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

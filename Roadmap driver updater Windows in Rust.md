@@ -108,19 +108,23 @@ Stato: implementato (`wdu update`, policy JSON con `--policy`). Il dry-run va es
 
 ### Fase 5 — Installazione sicura
 
-- [ ] Sequenza: punto di ripristino, backup del driver attuale, installazione, verifica dello stato del dispositivo, rollback automatico se fallisce
-- [ ] Installazione INF con `UpdateDriverForPlugAndPlayDevices` o `DiInstallDriver`
+- [x] Sequenza: punto di ripristino, backup del driver attuale, installazione, verifica dello stato del dispositivo, rollback automatico se fallisce
+- [x] Installazione INF con `UpdateDriverForPlugAndPlayDevices` o `DiInstallDriver`
 
 Fatto quando: il rollback funziona provocando un errore deliberato su VM.
 
+Stato: implementato (`session.rs`): punto di ripristino per sessione, backup del driver attuale (export dal driver store per i pacchetti `oemNN.inf`, INF di sistema per quelli inbox), installazione INF con `UpdateDriverForPlugAndPlayDevices`, verifica di presenza e problem code (il codice 14 vale come riavvio necessario), reinstallazione forzata del driver precedente. Per la prova su VM: `wdu update --only <ID> --inject-failure` (da amministratore) fa fallire la verifica e scatena il rollback; l'esito finisce nello storico come `rolled_back`. Il rollback ripristina solo il driver: il software aggiunto da un installer del produttore resta.
+
 ### Fase 6 — Servizio e UI
 
-- [ ] Servizio LocalSystem con il crate `windows-service`
-- [ ] Named pipe con ACL ristretta e protocollo JSON versionato
-- [ ] UI Tauri non elevata: lista aggiornamenti, approvazione, storico, pianificazione
-- [ ] Controllo periodico; installazione solo su approvazione o secondo policy
+- [x] Servizio LocalSystem con il crate `windows-service`
+- [x] Named pipe con ACL ristretta e protocollo JSON versionato
+- [x] UI Tauri non elevata: lista aggiornamenti, approvazione, storico, pianificazione
+- [x] Controllo periodico; installazione solo su approvazione o secondo policy
 
 Fatto quando: un utente standard completa il ciclo dalla UI senza prompt UAC per ogni operazione.
+
+Stato: implementato. Pipe `\\.\pipe\wdu`: client remoti rifiutati; DACL che dà agli utenti interattivi lettura e scrittura ma non la creazione di istanze; prima istanza esclusiva, così nessun altro processo si spaccia per il servizio. Messaggi JSON su una riga con versione `v`. Il servizio accetta solo installazioni di ID proposti dall'ultima scansione, valida la configurazione e esegue un'operazione alla volta. Provati in console come utente standard: protocollo, scansione e UI. Da provare con il servizio installato (`wdu-service install` da amministratore) il ciclo completo con un aggiornamento reale.
 
 ### Fase 7 — Distribuzione
 

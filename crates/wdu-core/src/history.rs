@@ -16,6 +16,8 @@ use crate::provider::Source;
 pub enum Outcome {
     Succeeded,
     Failed,
+    /// Installed, found broken, and the previous driver restored.
+    RolledBack,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

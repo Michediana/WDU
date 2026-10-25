@@ -23,7 +23,28 @@ target/debug/wdu update --all                 # installa tutto ciò che propone
 target/debug/wdu wu-install <UPDATE_ID>       # installa da Windows Update per ID
 target/debug/wdu history                      # esiti delle installazioni
 target/debug/wdu verify <file>                # firma Authenticode
+target/debug/wdu ipc '{"type":"status"}'      # una richiesta al servizio
 ```
+
+Installazione sicura (`update --only` / `--all`): punto di ripristino, backup del
+driver attuale in `%ProgramData%\WDU\backup`, installazione, verifica del
+dispositivo e ripristino automatico del driver precedente se qualcosa non va.
+`--inject-failure` (nascosto) fa fallire la verifica per provare il rollback su VM;
+`--no-restore-point` salta il punto di ripristino.
+
+Servizio e UI:
+
+```
+cargo build
+target/debug/wdu-service run                  # servizio in console, per sviluppo
+target/debug/wdu-service install              # registra e avvia come LocalSystem (amministratore)
+target/debug/wdu-service uninstall
+target/debug/wdu-ui                           # UI, sempre da utente normale
+```
+
+Il servizio va installato da una cartella non scrivibile dagli utenti (Program
+Files): gira come SYSTEM. Log del servizio in `%ProgramData%\WDU\logs`, stato in
+`config.json` e `last_scan.json` nella stessa cartella.
 
 Policy (`policy.json`, tutti i campi facoltativi):
 
@@ -49,4 +70,8 @@ Struttura:
   Windows Update (WUA/COM: ricerca, installazione, policy), cataloghi Dell, HP e
   Lenovo con cache, trait `Provider` e candidati comuni, matching e policy,
   verifica Authenticode, installazione dei pacchetti OEM, storico
+- `crates/wdu-core` (segue) — installazione sicura (`session`), punto di ripristino,
+  scansione condivisa (`engine`), protocollo e named pipe (`ipc`)
 - `crates/wdu-cli` — CLI `wdu`
+- `crates/wdu-service` — servizio Windows (`wdu-service`)
+- `crates/wdu-ui` — UI Tauri (`wdu-ui`), frontend statico in `ui/`

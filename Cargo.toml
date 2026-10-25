@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/wdu-core", "crates/wdu-cli"]
+members = ["crates/wdu-core", "crates/wdu-cli", "crates/wdu-service", "crates/wdu-ui"]
 
 [workspace.package]
 version = "0.1.0"
@@ -24,3 +24,6 @@ clap = { version = "4", features = ["derive"] }
 wmi = "0.18"
 windows = "0.62"
 windows-core = "0.62"
+windows-service = "0.8"
+tauri = "2"
+tauri-build = "2"

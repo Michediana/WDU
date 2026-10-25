@@ -1,0 +1,143 @@
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --text: #1c2129;
+  --muted: #667085;
+  --border: #e3e6eb;
+  --accent: #2563eb;
+  --accent-text: #ffffff;
+  --ok: #157f3b;
+  --warn-bg: #fff5d6;
+  --warn-text: #7a5300;
+  --error-bg: #fde8e8;
+  --error-text: #a11d1d;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15181d;
+    --panel: #1d2127;
+    --text: #e7e9ee;
+    --muted: #98a1b0;
+    --border: #2e333c;
+    --accent: #4f86f7;
+    --ok: #4ccf7a;
+    --warn-bg: #3a3014;
+    --warn-text: #f3d27a;
+    --error-bg: #3d1c1c;
+    --error-text: #f4a3a3;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 "Segoe UI", system-ui, sans-serif;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+h1 { font-size: 18px; margin: 0; }
+h2 { font-size: 15px; margin: 20px 0 8px; }
+
+nav { display: flex; gap: 4px; }
+
+button {
+  font: inherit;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+button:disabled { opacity: .5; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+button.tab { border-color: transparent; }
+button.tab.active { background: var(--bg); border-color: var(--border); }
+
+main { padding: 16px 20px 32px; max-width: 1100px; }
+
+.banner { margin: 12px 20px 0; padding: 10px 14px; border-radius: 6px; }
+main .banner { margin: 12px 0 0; }
+.banner.warn { background: var(--warn-bg); color: var(--warn-text); }
+.banner.error { background: var(--error-bg); color: var(--error-text); }
+
+.status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 28px;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.status dl { display: grid; grid-template-columns: auto auto; gap: 2px 10px; margin: 0; }
+.status dt { color: var(--muted); }
+.status dd { margin: 0; }
+.actions { display: flex; gap: 8px; align-items: center; margin-left: auto; }
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.badge.busy { border-color: var(--accent); color: var(--accent); }
+.badge.ok { border-color: var(--ok); color: var(--ok); }
+.badge.bad { border-color: var(--error-text); color: var(--error-text); }
+
+.muted { color: var(--muted); }
+.notes { margin: 10px 0 0; padding-left: 18px; color: var(--muted); }
+
+.cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.cards li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.cards input { margin-top: 3px; }
+.cards .title { font-weight: 600; }
+.cards .devices { grid-column: 2; margin: 0; padding-left: 18px; color: var(--muted); }
+
+details { margin-top: 20px; }
+summary { cursor: pointer; color: var(--muted); }
+.counts { margin: 8px 0; padding-left: 18px; color: var(--muted); }
+
+table { width: 100%; border-collapse: collapse; margin-top: 8px; background: var(--panel); }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+td.detail { color: var(--muted); max-width: 420px; overflow-wrap: anywhere; }
+
+form { display: grid; gap: 14px; max-width: 640px; }
+form label { display: grid; gap: 4px; }
+form label.check { display: flex; gap: 8px; align-items: flex-start; }
+form small { color: var(--muted); }
+input[type=text], input[type=number] {
+  font: inherit;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+input[type=number] { width: 90px; }

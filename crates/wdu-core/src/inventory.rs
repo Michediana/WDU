@@ -56,6 +56,15 @@ pub fn enumerate_devices(options: InventoryOptions) -> Result<Vec<Device>> {
     Ok(devices)
 }
 
+/// Re-reads one device, e.g. to check it after an installation.
+pub fn find_device(instance_id: &str) -> Result<Option<Device>> {
+    Ok(enumerate_devices(InventoryOptions {
+        include_absent: true,
+    })?
+    .into_iter()
+    .find(|d| d.instance_id.eq_ignore_ascii_case(instance_id)))
+}
+
 struct DevInfoSet(HDEVINFO);
 
 impl Drop for DevInfoSet {

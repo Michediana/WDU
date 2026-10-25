@@ -41,11 +41,16 @@ pub fn ole_date_to_date(date: f64) -> Option<String> {
     Some(format_date((date - OLE_UNIX_OFFSET_DAYS).floor() as i64))
 }
 
-pub fn now_rfc3339() -> String {
-    let secs = SystemTime::now()
+/// Seconds since 1970-01-01, UTC.
+pub fn unix_now() -> u64 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .unwrap_or(0)
+}
+
+/// Seconds since 1970-01-01 to RFC 3339, UTC.
+pub fn rfc3339(secs: u64) -> String {
     let (date, rem) = (secs / 86_400, secs % 86_400);
     format!(
         "{}T{:02}:{:02}:{:02}Z",
@@ -54,6 +59,10 @@ pub fn now_rfc3339() -> String {
         rem % 3600 / 60,
         rem % 60
     )
+}
+
+pub fn now_rfc3339() -> String {
+    rfc3339(unix_now())
 }
 
 #[cfg(test)]
@@ -77,5 +86,6 @@ mod tests {
         assert_eq!(filetime_to_date(0), None);
         assert_eq!(ole_date_to_date(45_292.0).as_deref(), Some("2024-01-01"));
         assert_eq!(ole_date_to_date(0.0), None);
+        assert_eq!(rfc3339(1_704_067_200 + 3_661), "2024-01-01T01:01:01Z");
     }
 }

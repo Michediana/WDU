@@ -6,7 +6,8 @@
 //! target device the INF is installed through PnP, otherwise the vendor
 //! installer runs with its silent switches.
 //!
-//! Restore points, driver backup and rollback come with phase 5.
+//! Restore points, driver backup, verification and rollback are in
+//! [`crate::session`], which wraps every installation.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,6 +16,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use windows::Win32::Devices::DeviceAndDriverInstallation::{
+    INSTALLFLAG_FORCE, INSTALLFLAG_NONINTERACTIVE, UpdateDriverForPlugAndPlayDevicesW,
+};
+use windows::Win32::Foundation::ERROR_NO_MORE_ITEMS;
+use windows::core::{BOOL, HSTRING};
 
 use crate::model::Brand;
 use crate::oem::xml::decode_text;
@@ -29,8 +35,8 @@ const INSTALL_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const ERROR_SUCCESS_REBOOT_REQUIRED: i32 = 3010;
 /// Windows: success, the installer started a restart.
 const ERROR_SUCCESS_REBOOT_INITIATED: i32 = 1641;
-/// pnputil: package added to the store but not better for any device.
-const ERROR_NO_MORE_ITEMS: i32 = 259;
+/// SetupAPI `ERROR_NO_SUCH_DEVINST`: no present device has the hardware ID.
+const ERROR_NO_SUCH_DEVINST: u32 = 0xE000_020B;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
@@ -114,7 +120,7 @@ pub fn install_package(
     let infs = find_infs(&extracted, hardware_ids)?;
 
     let (method, reboot_required) = if !infs.is_empty() {
-        install_infs(&infs)?
+        install_infs(&infs, hardware_ids)?
     } else if extension == "cab" {
         bail!("{file_name} contains no INF for the target devices");
     } else {
@@ -138,7 +144,7 @@ fn file_name_of(url: &str) -> Result<String> {
 }
 
 /// Keeps names usable as a single path component.
-fn safe_name(name: &str) -> String {
+pub(crate) fn safe_name(name: &str) -> String {
     let s: String = name
         .chars()
         .map(|c| {
@@ -184,7 +190,7 @@ fn extract(brand: Brand, extension: &str, package: &Path, dest: &Path) -> Result
 }
 
 /// INFs below `dir` that name one of `hardware_ids`.
-fn find_infs(dir: &Path, hardware_ids: &[String]) -> Result<Vec<PathBuf>> {
+pub(crate) fn find_infs(dir: &Path, hardware_ids: &[String]) -> Result<Vec<PathBuf>> {
     let ids: Vec<String> = hardware_ids
         .iter()
         .map(|i| i.to_ascii_uppercase())
@@ -215,7 +221,7 @@ fn find_infs(dir: &Path, hardware_ids: &[String]) -> Result<Vec<PathBuf>> {
 }
 
 /// INFs are UTF-16 with BOM, UTF-8, or ANSI.
-fn read_inf(path: &Path) -> Result<String> {
+pub(crate) fn read_inf(path: &Path) -> Result<String> {
     let bytes = fs::read(path)?;
     Ok(decode_text(&bytes).unwrap_or_else(|_| bytes.iter().map(|&b| b as char).collect()))
 }
@@ -231,35 +237,79 @@ fn contains_id(text: &str, id: &str) -> bool {
     })
 }
 
-fn system32(exe: &str) -> PathBuf {
+pub(crate) fn system32(exe: &str) -> PathBuf {
     let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
     Path::new(&root).join("System32").join(exe)
 }
 
-fn install_infs(infs: &[PathBuf]) -> Result<(InstallMethod, bool)> {
+/// Installs `inf` on the present devices that have exactly `hardware_id`.
+///
+/// Without `force`, PnP installs it only when it ranks better than the
+/// current driver; with `force`, it is installed anyway (used for rollback).
+/// Returns `None` when no device took it, otherwise whether a restart is needed.
+pub fn update_driver(inf: &Path, hardware_id: &str, force: bool) -> Result<Option<bool>> {
+    let mut flags = INSTALLFLAG_NONINTERACTIVE;
+    if force {
+        flags |= INSTALLFLAG_FORCE;
+    }
+    let mut reboot = BOOL(0);
+    let result = unsafe {
+        UpdateDriverForPlugAndPlayDevicesW(
+            None,
+            &HSTRING::from(hardware_id),
+            &HSTRING::from(inf.as_os_str()),
+            flags,
+            Some(&raw mut reboot),
+        )
+    };
+    match result {
+        Ok(()) => Ok(Some(reboot.as_bool())),
+        Err(err)
+            if err.code() == ERROR_NO_MORE_ITEMS.to_hresult()
+                || err.code().0 as u32 == ERROR_NO_SUCH_DEVINST =>
+        {
+            Ok(None)
+        }
+        Err(err) => {
+            Err(err).with_context(|| format!("cannot install {} for {hardware_id}", inf.display()))
+        }
+    }
+}
+
+/// The IDs among `ids` that `inf` lists, in the order given.
+pub(crate) fn ids_in_inf(inf: &Path, ids: &[String]) -> Result<Vec<String>> {
+    let text = read_inf(inf)?.to_ascii_uppercase();
+    let mut found: Vec<String> = Vec::new();
+    for id in ids {
+        if contains_id(&text, &id.to_ascii_uppercase())
+            && !found.iter().any(|f| f.eq_ignore_ascii_case(id))
+        {
+            found.push(id.clone());
+        }
+    }
+    Ok(found)
+}
+
+fn install_infs(infs: &[PathBuf], hardware_ids: &[String]) -> Result<(InstallMethod, bool)> {
     let mut installed = Vec::new();
     let mut reboot = false;
     for inf in infs {
-        let out = Command::new(system32("pnputil.exe"))
-            .arg("/add-driver")
-            .arg(inf)
-            .arg("/install")
-            .output()
-            .context("cannot run pnputil")?;
-        let code = out.status.code().unwrap_or(-1);
-        tracing::info!(inf = %inf.display(), code, "pnputil");
-        match code {
-            0 => {}
-            ERROR_SUCCESS_REBOOT_REQUIRED => reboot = true,
-            // Staged in the driver store but not better for any device.
-            ERROR_NO_MORE_ITEMS => continue,
-            _ => bail!(
-                "pnputil failed on {} with {code}: {}",
-                inf.display(),
-                String::from_utf8_lossy(&out.stdout).trim()
-            ),
+        let mut applied = false;
+        for id in ids_in_inf(inf, hardware_ids)? {
+            match update_driver(inf, &id, false)? {
+                Some(r) => {
+                    tracing::info!(inf = %inf.display(), id, reboot = r, "driver installed");
+                    reboot |= r;
+                    applied = true;
+                }
+                None => {
+                    tracing::info!(inf = %inf.display(), id, "not better than the installed driver")
+                }
+            }
         }
-        installed.push(inf.display().to_string());
+        if applied {
+            installed.push(inf.display().to_string());
+        }
     }
     if installed.is_empty() {
         bail!("PnP did not install the driver on any device: the installed one ranks higher");

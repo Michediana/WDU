@@ -1,0 +1,18 @@
+[package]
+name = "wdu-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "wdu-ui"
+path = "src/main.rs"
+
+[dependencies]
+wdu-core.workspace = true
+# custom-protocol: serve the embedded `ui/` folder, without the Tauri CLI or a dev server.
+tauri = { workspace = true, features = ["custom-protocol"] }
+
+[build-dependencies]
+tauri-build.workspace = true
