@@ -224,6 +224,10 @@ impl Provider for HpProvider {
         Source::Hp
     }
 
+    fn location(&self) -> Option<String> {
+        Some(PLATFORM_LIST_URL.to_string())
+    }
+
     fn candidates(&self) -> Result<Vec<Candidate>> {
         fetch(&self.http, &self.query)?.candidates(self.query.windows11)
     }

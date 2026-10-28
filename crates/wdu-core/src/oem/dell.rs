@@ -163,6 +163,10 @@ impl Provider for DellProvider {
         Source::Dell
     }
 
+    fn location(&self) -> Option<String> {
+        Some(INDEX_URL.to_string())
+    }
+
     fn candidates(&self) -> Result<Vec<Candidate>> {
         fetch(&self.http, &self.query.system_id)?.candidates(self.query.windows11)
     }

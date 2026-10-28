@@ -1,6 +1,7 @@
 //! Italian labels for the service's codes, and dates in local time.
 
 use wdu_core::driver_store::{DriverPackage, PackageUse};
+use wdu_core::engine::{ScanStep, StepKind};
 use wdu_core::history::Outcome;
 use wdu_core::ipc::ServiceState;
 use wdu_core::matching::{Reason, SkipReason};
@@ -34,6 +35,55 @@ pub fn state(state: ServiceState) -> &'static str {
         ServiceState::Installing => "Installazione in corso…",
         ServiceState::Removing => "Rimozione dei driver vecchi…",
     }
+}
+
+/// What a scan step does, and where.
+pub fn scan_step(step: &ScanStep) -> (String, String) {
+    let place = |default: &str| step.place.clone().unwrap_or_else(|| default.into());
+    match step.kind {
+        StepKind::Machine => ("Identificazione del PC".into(), "questo PC".into()),
+        StepKind::Devices => (
+            "Elenco dei dispositivi".into(),
+            "Gestione dispositivi".into(),
+        ),
+        StepKind::Search {
+            source: Some(Source::WindowsUpdate),
+        } => (
+            "Ricerca su Windows Update".into(),
+            match &step.place {
+                Some(server) => format!("server WSUS {server}"),
+                None => "server Microsoft".into(),
+            },
+        ),
+        StepKind::Search {
+            source: Some(source),
+        } => (
+            format!("Catalogo driver {}", self::source(source)),
+            place("sito del produttore"),
+        ),
+        StepKind::Search { source: None } => (
+            "Catalogo del produttore".into(),
+            place("sito del produttore"),
+        ),
+        StepKind::Matching => (
+            "Confronto con i driver installati".into(),
+            "questo PC".into(),
+        ),
+    }
+}
+
+/// What a finished step found: `182 dispositivi`, `12 driver offerti`.
+pub fn scan_found(step: &ScanStep) -> Option<String> {
+    let n = step.found?;
+    Some(match step.kind {
+        StepKind::Devices if n == 1 => "1 dispositivo".into(),
+        StepKind::Devices => format!("{n} dispositivi"),
+        StepKind::Search { .. } if n == 1 => "1 driver offerto".into(),
+        StepKind::Search { .. } => format!("{n} driver offerti"),
+        StepKind::Matching if n == 1 => "1 aggiornamento proposto".into(),
+        StepKind::Matching => format!("{n} aggiornamenti proposti"),
+        StepKind::Machine => return None,
+    })
 }
 
 pub fn reason(reason: Reason) -> &'static str {

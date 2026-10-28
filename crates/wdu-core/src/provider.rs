@@ -114,4 +114,9 @@ pub trait Provider {
 
     /// Driver updates this source offers for the current machine.
     fn candidates(&self) -> Result<Vec<Candidate>>;
+
+    /// Where the search goes (a catalog URL, a WSUS server), to show it.
+    fn location(&self) -> Option<String> {
+        None
+    }
 }

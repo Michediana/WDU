@@ -509,6 +509,11 @@ impl Provider for WindowsUpdateProvider {
         Source::WindowsUpdate
     }
 
+    /// The WSUS server set by policy; `None` means Microsoft's servers.
+    fn location(&self) -> Option<String> {
+        read_update_policy().wsus_server
+    }
+
     fn candidates(&self) -> Result<Vec<Candidate>> {
         let policy = read_update_policy();
         if policy.drivers_excluded {

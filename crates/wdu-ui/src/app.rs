@@ -13,7 +13,7 @@ use egui_extras::{Column, TableBuilder};
 use lucide_icons::Icon;
 use wdu_core::driver_files::{self, DriverFile};
 use wdu_core::driver_store::{self, DriverPackage, PackageUse};
-use wdu_core::engine::ScanResult;
+use wdu_core::engine::{ScanResult, ScanStep, StepState};
 use wdu_core::history::{HistoryRecord, Outcome};
 use wdu_core::ipc::{self, Request, Response, ServiceConfig, ServiceState, ServiceStatus};
 use wdu_core::model::Device;
@@ -21,9 +21,9 @@ use wdu_core::model::Device;
 use crate::{shell, text};
 
 const POLL: Duration = Duration::from_secs(2);
+/// While a scan runs, so each step shows as it starts.
+const SCAN_POLL: Duration = Duration::from_millis(500);
 const OK: Color32 = Color32::from_rgb(0x2e, 0x9e, 0x4f);
-/// Width of one icon button in a table's leading column of actions.
-const ACTION_WIDTH: f32 = 24.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -143,6 +143,8 @@ pub struct App {
     offline: Option<String>,
     /// `None` until the first plan arrives; then the last scan, if any.
     scan: Option<Option<Box<ScanResult>>>,
+    /// The running scan step, and when this window first saw it.
+    step_since: Option<(usize, Instant)>,
     selected: HashSet<String>,
     history: Vec<HistoryRecord>,
 
@@ -200,6 +202,7 @@ impl App {
             status: None,
             offline: None,
             scan: None,
+            step_since: None,
             selected: HashSet::new(),
             history: Vec::new(),
             devices: None,
@@ -273,6 +276,15 @@ impl App {
                         self.alert = Some(format!("Non tutti i driver sono stati rimossi: {err}"));
                     }
                 }
+                let running = status
+                    .scan_steps
+                    .iter()
+                    .rposition(|s| s.state == StepState::Running);
+                self.step_since = match (running, self.step_since) {
+                    (Some(i), Some((j, since))) if i == j => Some((i, since)),
+                    (Some(i), _) => Some((i, Instant::now())),
+                    (None, _) => None,
+                };
                 self.status = Some(status);
             }
             (Call::Status, Err(err)) => {
@@ -488,6 +500,7 @@ impl App {
             }
         });
         ui.add_space(6.0);
+        self.scan_steps(ui);
 
         if let Some(status) = &self.status {
             if let Some(err) = &status.last_error {
@@ -603,6 +616,36 @@ impl App {
             });
     }
 
+    /// What the scan searches and where, step by step: open while it runs,
+    /// folded away afterwards.
+    fn scan_steps(&self, ui: &mut Ui) {
+        let Some(status) = self.status.as_ref().filter(|s| !s.scan_steps.is_empty()) else {
+            return;
+        };
+        let show = |ui: &mut Ui| {
+            for (i, step) in status.scan_steps.iter().enumerate() {
+                let elapsed = self
+                    .step_since
+                    .filter(|(running, _)| *running == i)
+                    .map(|(_, since)| since.elapsed());
+                scan_step(ui, step, elapsed);
+            }
+        };
+        if status.state == ServiceState::Scanning {
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.strong("Cosa sta cercando WDU");
+                ui.add_space(2.0);
+                show(ui);
+            });
+        } else {
+            egui::CollapsingHeader::new("Dettagli dell'ultima ricerca")
+                .id_salt("scan-steps")
+                .show(ui, show);
+        }
+        ui.add_space(6.0);
+    }
+
     // --- installed drivers ----------------------------------------------------
 
     fn drivers(&mut self, ui: &mut Ui) {
@@ -706,7 +749,7 @@ impl App {
             .resizable(true)
             .auto_shrink(false)
             .cell_layout(Layout::left_to_right(Align::Center))
-            .column(Column::exact(2.0 * ACTION_WIDTH).resizable(false))
+            .column(Column::auto().resizable(false))
             .column(Column::auto().at_least(120.0).at_most(460.0).clip(true))
             .column(Column::auto().at_least(80.0).at_most(420.0).clip(true))
             .column(Column::auto().at_least(60.0).at_most(200.0).clip(true))
@@ -720,7 +763,9 @@ impl App {
                     .resizable(false),
             )
             .header(24.0, |mut row| {
-                row.col(|_| {});
+                row.col(|ui| {
+                    ui.strong("Azioni");
+                });
                 for (k, title) in [
                     (SortKey::Name, "Dispositivo"),
                     (SortKey::Driver, "Driver"),
@@ -750,14 +795,23 @@ impl App {
                     let (d, origin) = &rows[row.index()];
                     let driver = d.driver.as_ref();
                     row.col(|ui| {
-                        if row_button(ui, Icon::SquareArrowOutUpRight, "Proprietà del dispositivo")
-                            && let Err(err) = shell::device_properties(&d.instance_id)
+                        if row_button(
+                            ui,
+                            Icon::SquareArrowOutUpRight,
+                            "Proprietà",
+                            "Apre le proprietà del dispositivo in Windows",
+                        ) && let Err(err) = shell::device_properties(&d.instance_id)
                         {
                             *alert = Some(err);
                         }
                         let clicked = ui
                             .add_enabled_ui(driver.is_some(), |ui| {
-                                row_button(ui, Icon::Files, "Dettagli driver")
+                                row_button(
+                                    ui,
+                                    Icon::Files,
+                                    "File driver",
+                                    "Mostra i file del driver, con versione e firma digitale",
+                                )
                             })
                             .inner;
                         if clicked {
@@ -1032,7 +1086,7 @@ impl App {
             .resizable(true)
             .auto_shrink(false)
             .cell_layout(Layout::left_to_right(Align::Center))
-            .column(Column::exact(2.0 * ACTION_WIDTH).resizable(false))
+            .column(Column::auto().resizable(false))
             .column(Column::auto().at_least(160.0).at_most(480.0).clip(true))
             .column(Column::auto().at_least(60.0).at_most(200.0).clip(true))
             .column(Column::auto().at_least(60.0).at_most(200.0).clip(true))
@@ -1046,7 +1100,9 @@ impl App {
                     .resizable(false),
             )
             .header(24.0, |mut row| {
-                row.col(|_| {});
+                row.col(|ui| {
+                    ui.strong("Azioni");
+                });
                 for (k, title) in [
                     (PackageSort::Name, "Driver"),
                     (PackageSort::Class, "Classe"),
@@ -1459,11 +1515,20 @@ impl eframe::App for App {
         while let Ok(reply) = self.rx.try_recv() {
             self.handle(reply);
         }
-        if self.last_poll.elapsed() >= POLL {
+        let poll = if self
+            .status
+            .as_ref()
+            .is_some_and(|s| s.state == ServiceState::Scanning)
+        {
+            SCAN_POLL
+        } else {
+            POLL
+        };
+        if self.last_poll.elapsed() >= poll {
             self.last_poll = Instant::now();
             self.send(Call::Status, Request::Status);
         }
-        ui.ctx().request_repaint_after(POLL);
+        ui.ctx().request_repaint_after(poll);
 
         egui::Panel::top("header").show(ui, |ui| self.header(ui));
         egui::CentralPanel::default_margins().show(ui, |ui| {
@@ -1520,10 +1585,20 @@ fn package_actions(ui: &mut Ui, p: &DriverPackage) -> Result<(), String> {
             p.store_path.as_deref(),
         )
     };
-    if row_button(ui, Icon::SquareArrowOutUpRight, "Proprietà del file INF") {
+    if row_button(
+        ui,
+        Icon::SquareArrowOutUpRight,
+        "Proprietà",
+        "Apre le proprietà del file INF in Windows",
+    ) {
         shell::file_properties(&inf())?;
     }
-    if row_button(ui, Icon::FolderOpen, "Apri la cartella del driver") {
+    if row_button(
+        ui,
+        Icon::FolderOpen,
+        "Cartella",
+        "Apre la cartella del driver in Esplora file",
+    ) {
         shell::show_in_folder(&inf())?;
     }
     Ok(())
@@ -1614,11 +1689,50 @@ fn fit(ui: &Ui) -> egui::TextWrapMode {
     }
 }
 
-/// A small icon button in a table's leading column of actions.
-fn row_button(ui: &mut Ui, glyph: Icon, tip: &str) -> bool {
-    ui.add(Button::new(icon(glyph)).frame(false))
+/// A small labelled button in a table's leading column of actions.
+fn row_button(ui: &mut Ui, glyph: Icon, label: &str, tip: &str) -> bool {
+    ui.add(Button::new((icon(glyph), label)).small())
         .on_hover_text(tip)
         .clicked()
+}
+
+/// One line of the scan steps: state, what, where, and what it found.
+fn scan_step(ui: &mut Ui, step: &ScanStep, elapsed: Option<Duration>) {
+    let (what, place) = text::scan_step(step);
+    let error = ui.visuals().error_fg_color;
+    ui.horizontal_wrapped(|ui| {
+        match step.state {
+            StepState::Running => {
+                ui.spinner();
+            }
+            StepState::Done => {
+                ui.label(icon(Icon::CircleCheck).color(OK));
+            }
+            StepState::Failed => {
+                ui.label(icon(Icon::CircleX).color(error));
+            }
+        }
+        ui.label(RichText::new(&what).strong());
+        ui.weak(format!("— {place}"));
+        if let Some(found) = text::scan_found(step) {
+            ui.label(format!("· {found}"));
+        }
+        if step.state == StepState::Done
+            && let Some(detail) = &step.detail
+        {
+            ui.label(format!("· {detail}"));
+        }
+        if let Some(elapsed) = elapsed {
+            ui.weak(format!("· {} s", elapsed.as_secs()));
+        }
+    });
+    if step.state == StepState::Failed
+        && let Some(detail) = &step.detail
+    {
+        ui.indent(("scan-step-error", &what), |ui| {
+            ui.add(Label::new(RichText::new(detail).color(error)).wrap());
+        });
+    }
 }
 
 /// One file in the driver details, with what Windows shows for it.

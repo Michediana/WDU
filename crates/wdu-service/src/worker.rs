@@ -203,7 +203,12 @@ impl Service {
     }
 
     fn scan(&self, http: &Http, automatic: bool) {
-        self.state().status.state = ServiceState::Scanning;
+        {
+            let mut state = self.state();
+            state.status.state = ServiceState::Scanning;
+            state.status.current = None;
+            state.status.scan_steps.clear();
+        }
         let (options, policy) = {
             let state = self.state();
             let options = ScanOptions {
@@ -214,7 +219,9 @@ impl Service {
             (options, state.config.policy.clone())
         };
         tracing::info!(automatic, "scan started");
-        let result = engine::scan(http, &options, &policy);
+        let result = engine::scan_with_progress(http, &options, &policy, |steps| {
+            self.state().status.scan_steps = steps.to_vec();
+        });
         let auto_install = {
             let mut state = self.state();
             state.last_scan_unix = Some(time::unix_now());

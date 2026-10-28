@@ -200,6 +200,10 @@ impl Provider for LenovoProvider {
         Source::Lenovo
     }
 
+    fn location(&self) -> Option<String> {
+        Some(catalog_url(&self.query.system_id, self.query.windows11))
+    }
+
     fn candidates(&self) -> Result<Vec<Candidate>> {
         // Hardware IDs and versions are only in the package descriptors.
         let query = CatalogQuery {

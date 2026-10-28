@@ -28,7 +28,7 @@ use windows::Win32::System::Pipes::{
 use windows::core::HSTRING;
 
 use crate::driver_store::DriverPackage;
-use crate::engine::ScanResult;
+use crate::engine::{ScanResult, ScanStep};
 use crate::history::HistoryRecord;
 use crate::matching::Policy;
 use crate::model::Device;
@@ -120,6 +120,9 @@ pub struct ServiceStatus {
     pub reboot_required: bool,
     /// Non-fatal problems of the last operation (e.g. System Restore off).
     pub warnings: Vec<String>,
+    /// Steps of the running scan, or of the last one since the service started.
+    #[serde(default)]
+    pub scan_steps: Vec<ScanStep>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
