@@ -27,6 +27,7 @@ use windows::Win32::System::Pipes::{
 };
 use windows::core::HSTRING;
 
+use crate::driver_store::DriverPackage;
 use crate::engine::ScanResult;
 use crate::history::HistoryRecord;
 use crate::matching::Policy;
@@ -61,6 +62,13 @@ pub enum Request {
     History,
     /// Present devices and their installed drivers.
     Devices,
+    /// Third-party packages in the driver store, with superseded versions.
+    DriverPackages,
+    /// Remove these packages from the driver store. Only older versions no
+    /// connected device uses are accepted. Runs in the background.
+    RemovePackages {
+        names: Vec<String>,
+    },
     GetConfig,
     SetConfig {
         config: ServiceConfig,
@@ -75,6 +83,7 @@ pub enum Response {
     Plan { scan: Option<Box<ScanResult>> },
     History { records: Vec<HistoryRecord> },
     Devices { devices: Vec<Device> },
+    DriverPackages { packages: Vec<DriverPackage> },
     Config { config: ServiceConfig },
     Accepted,
     Error { message: String },
@@ -95,12 +104,13 @@ pub enum ServiceState {
     Idle,
     Scanning,
     Installing,
+    Removing,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ServiceStatus {
     pub state: ServiceState,
-    /// Proposal being installed.
+    /// Proposal being installed, or package being removed.
     pub current: Option<String>,
     /// RFC 3339, UTC.
     pub last_scan: Option<String>,

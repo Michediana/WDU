@@ -6,6 +6,9 @@ Prototipo in Rust (vedi la [roadmap](Roadmap%20driver%20updater%20Windows%20in%2
 cargo build
 target/debug/wdu machine                      # produttore, modello, ID per il catalogo OEM
 target/debug/wdu devices [--hidden] [--all]   # dispositivi e driver installati
+target/debug/wdu packages [--old]             # pacchetti nel driver store (oemNN.inf), chi li usa
+                                              # e le versioni vecchie non usate
+target/debug/wdu packages --remove-old        # le rimuove dal driver store (da amministratore)
 target/debug/wdu snapshot -o inventory.json   # snapshot JSON (diagnostica e test)
 target/debug/wdu wu                           # driver disponibili su Windows Update
 target/debug/wdu catalog                      # catalogo OEM di questa macchina
@@ -75,4 +78,4 @@ Struttura:
   scansione condivisa (`engine`), protocollo e named pipe (`ipc`)
 - `crates/wdu-cli` — CLI `wdu`
 - `crates/wdu-service` — servizio Windows (`wdu-service`)
-- `crates/wdu-ui` — UI Tauri (`wdu-ui`), frontend statico in `ui/`
+- `crates/wdu-ui` — UI nativa in Rust con egui/eframe (`wdu-ui`)

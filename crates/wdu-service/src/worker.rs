@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use wdu_core::driver_store;
 use wdu_core::engine::{self, ScanOptions, ScanResult};
 use wdu_core::history::{History, Outcome};
 use wdu_core::inventory;
@@ -33,6 +34,7 @@ enum Job {
         automatic: bool,
     },
     Install(Vec<String>),
+    RemovePackages(Vec<String>),
 }
 
 struct State {
@@ -128,6 +130,31 @@ impl Service {
                 Ok(devices) => Response::Devices { devices },
                 Err(err) => Response::error(format!("{err:#}")),
             },
+            Request::DriverPackages => match driver_store::enumerate_packages() {
+                Ok(packages) => Response::DriverPackages { packages },
+                Err(err) => Response::error(format!("{err:#}")),
+            },
+            Request::RemovePackages { names } => {
+                if names.is_empty() {
+                    return Response::error("no driver package selected");
+                }
+                // Checked against the store now, not against what the client saw.
+                let packages = match driver_store::enumerate_packages() {
+                    Ok(packages) => packages,
+                    Err(err) => return Response::error(format!("{err:#}")),
+                };
+                for name in &names {
+                    let package = packages
+                        .iter()
+                        .find(|p| p.published_name.eq_ignore_ascii_case(name));
+                    if !package.is_some_and(|p| p.is_old_unused()) {
+                        return Response::error(format!(
+                            "`{name}` is not an older driver version that no device uses"
+                        ));
+                    }
+                }
+                self.enqueue(ServiceState::Removing, Job::RemovePackages(names))
+            }
             Request::GetConfig => Response::Config {
                 config: self.state().config.clone(),
             },
@@ -167,6 +194,7 @@ impl Service {
             match job {
                 Job::Scan { automatic } => self.scan(&http, automatic),
                 Job::Install(ids) => self.install(&http, &ids),
+                Job::RemovePackages(names) => self.remove_packages(&names),
             }
             let mut state = self.state();
             state.status.state = ServiceState::Idle;
@@ -266,6 +294,24 @@ impl Service {
         }
         // Refresh the plan: installed updates drop out of it.
         self.scan(http, false);
+    }
+
+    fn remove_packages(&self, names: &[String]) {
+        self.state().status.warnings.clear();
+        let mut failed = Vec::new();
+        for name in names {
+            self.state().status.current = Some(name.clone());
+            if let Err(err) = driver_store::delete_package(name) {
+                tracing::warn!("{err:#}");
+                failed.push(name.as_str());
+            }
+        }
+        if !failed.is_empty() {
+            self.state().status.last_error = Some(format!(
+                "not removed: {} (see the service log)",
+                failed.join(", ")
+            ));
+        }
     }
 
     fn schedule(&self, stop: Arc<AtomicBool>) {

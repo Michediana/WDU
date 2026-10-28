@@ -1,6 +1,7 @@
 //! Core of the Windows driver updater: inventory, machine identity, update
 //! sources, matching and installation.
 
+pub mod driver_store;
 pub mod history;
 pub mod matching;
 pub mod model;

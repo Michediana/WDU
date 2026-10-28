@@ -3,14 +3,11 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use wdu_core::ipc::{self, Request, Response};
+mod app;
+mod text;
 
-/// Forwards one request to the service. Off the main thread: a call may wait
-/// for the pipe.
-#[tauri::command(async)]
-fn service(request: Request) -> Result<Response, String> {
-    ipc::call(&request).map_err(|err| format!("{err:#}"))
-}
+use eframe::egui;
+use wdu_core::ipc::{self, Request};
 
 /// If no service answers on the pipe, starts `wdu-service run` from next to
 /// this exe, elevated through UAC, tied to this process: it stops when the
@@ -60,10 +57,39 @@ fn launch_service() -> windows::core::Result<()> {
     Ok(())
 }
 
-fn main() {
+/// The largest image in the exe's icon, for the title bar.
+fn window_icon() -> Option<egui::IconData> {
+    let icons = include_bytes!("../icons/icon.ico");
+    let dir = ico::IconDir::read(std::io::Cursor::new(&icons[..])).ok()?;
+    let image = dir
+        .entries()
+        .iter()
+        .max_by_key(|e| e.width())?
+        .decode()
+        .ok()?;
+    Some(egui::IconData {
+        rgba: image.rgba_data().to_vec(),
+        width: image.width(),
+        height: image.height(),
+    })
+}
+
+fn main() -> eframe::Result {
     start_service_if_missing();
-    tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![service])
-        .run(tauri::generate_context!())
-        .expect("cannot start the WDU window");
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("WDU – Aggiornamento driver")
+        .with_inner_size([1040.0, 760.0])
+        .with_min_inner_size([720.0, 520.0]);
+    if let Some(icon) = window_icon() {
+        viewport = viewport.with_icon(icon);
+    }
+    let options = eframe::NativeOptions {
+        viewport,
+        ..Default::default()
+    };
+    eframe::run_native(
+        "WDU",
+        options,
+        Box::new(|cc| Ok(Box::new(app::App::new(cc.egui_ctx.clone())))),
+    )
 }

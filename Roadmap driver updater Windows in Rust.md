@@ -24,7 +24,7 @@ Fuori dalla v1:
 
 ## Architettura
 
-Tutto il lavoro privilegiato vive in un servizio Windows in Rust; la UI Tauri gira come utente normale e parla col servizio tramite named pipe.
+Tutto il lavoro privilegiato vive in un servizio Windows in Rust; la UI (egui) gira come utente normale e parla col servizio tramite named pipe.
 
 &#91;embedded content: architettura · servizio, provider, UI\]
 
@@ -41,7 +41,7 @@ I due provider producono candidati nello stesso formato; il matching decide cosa
 | `sha2` | Verifica degli hash |
 | `rusqlite` | Stato, storico, cache |
 | `tracing` | Log strutturati |
-| `tauri` | UI desktop |
+| `eframe` / `egui` | UI desktop nativa |
 
 ## Fasi
 
@@ -119,7 +119,7 @@ Stato: implementato (`session.rs`): punto di ripristino per sessione, backup del
 
 - [x] Servizio LocalSystem con il crate `windows-service`
 - [x] Named pipe con ACL ristretta e protocollo JSON versionato
-- [x] UI Tauri non elevata: lista aggiornamenti, approvazione, storico, pianificazione
+- [x] UI egui non elevata: lista aggiornamenti, approvazione, storico, pianificazione
 - [x] Controllo periodico; installazione solo su approvazione o secondo policy
 
 Fatto quando: un utente standard completa il ciclo dalla UI senza prompt UAC per ogni operazione.

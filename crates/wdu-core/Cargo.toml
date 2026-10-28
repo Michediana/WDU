@@ -40,4 +40,7 @@ windows = { workspace = true, features = [
     "Win32_System_Pipes",
     "Win32_System_IO",
     "Win32_Storage_FileSystem",
+    # Both only to expose SetupGetInfDriverStoreLocationW.
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_SystemInformation",
 ] }

@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
+use wdu_core::driver_store::{self, DriverPackage, PackageUse};
 use wdu_core::engine::{self, ScanOptions};
 use wdu_core::history::{History, HistoryRecord, Outcome};
 use wdu_core::matching::{Plan, Policy, Proposal};
@@ -42,6 +43,17 @@ enum Command {
     Devices {
         #[command(flatten)]
         filter: DeviceFilter,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Third-party driver packages in the driver store and the devices using them.
+    Packages {
+        /// Only older versions that no connected device uses.
+        #[arg(long)]
+        old: bool,
+        /// Remove those older versions from the driver store (needs administrator).
+        #[arg(long, conflicts_with = "json")]
+        remove_old: bool,
         #[arg(long)]
         json: bool,
     },
@@ -233,6 +245,40 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&devices)?);
             } else {
                 print_devices(&devices);
+            }
+        }
+        Command::Packages {
+            old,
+            json,
+            remove_old,
+        } => {
+            let mut packages = driver_store::enumerate_packages()?;
+            if remove_old {
+                let mut failed = 0;
+                for p in packages.iter().filter(|p| p.is_old_unused()) {
+                    match driver_store::delete_package(&p.published_name) {
+                        Ok(()) => println!("removed {}", p.published_name),
+                        Err(err) => {
+                            eprintln!("{err:#}");
+                            failed += 1;
+                        }
+                    }
+                }
+                if failed > 0 {
+                    bail!("{failed} package(s) not removed");
+                }
+                return Ok(());
+            }
+            if old {
+                packages.retain(DriverPackage::is_old_unused);
+            }
+            packages.sort_by(|a, b| {
+                (&a.original_name, &a.published_name).cmp(&(&b.original_name, &b.published_name))
+            });
+            if json {
+                println!("{}", serde_json::to_string_pretty(&packages)?);
+            } else {
+                print_packages(&packages);
             }
         }
         Command::Snapshot { output, all } => {
@@ -674,6 +720,42 @@ fn print_devices(devices: &[Device]) {
             d.hardware_ids.first().map_or("-", String::as_str),
         );
     }
+}
+
+fn print_packages(packages: &[DriverPackage]) {
+    println!(
+        "{:<11} {:<28} {:<18} {:<10} {:<24} {:>9}  USE",
+        "PUBLISHED", "ORIGINAL", "VERSION", "DATE", "PROVIDER", "MB"
+    );
+    for p in packages {
+        let usage = match p.usage() {
+            PackageUse::InUse => format!("{} device(s)", p.devices.len()),
+            PackageUse::AbsentDevices => "disconnected devices only".into(),
+            PackageUse::NoDevice => "no device".into(),
+        };
+        let old = p
+            .superseded_by
+            .as_ref()
+            .map_or(String::new(), |by| format!(", older than {by}"));
+        println!(
+            "{:<11} {:<28} {:<18} {:<10} {:<24} {:>9.1}  {usage}{old}",
+            p.published_name,
+            fit(or_dash(&p.original_name), 28),
+            or_dash(&p.version),
+            or_dash(&p.date),
+            fit(or_dash(&p.provider), 24),
+            p.size as f64 / 1_048_576.0,
+        );
+    }
+    let old: Vec<_> = packages.iter().filter(|p| p.is_old_unused()).collect();
+    let size: u64 = old.iter().map(|p| p.size).sum();
+    println!(
+        "
+{} packages; {} older versions not in use ({:.1} MB)",
+        packages.len(),
+        old.len(),
+        size as f64 / 1_048_576.0
+    );
 }
 
 fn print_wu(updates: &[wua::WuDriverUpdate]) {
