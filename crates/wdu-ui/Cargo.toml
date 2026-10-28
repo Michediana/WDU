@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 wdu-core.workspace = true
+wdu-service.workspace = true
 gpui-kit.workspace = true
 
 [build-dependencies]

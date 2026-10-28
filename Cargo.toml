@@ -10,6 +10,7 @@ publish = false
 
 [workspace.dependencies]
 wdu-core = { path = "crates/wdu-core" }
+wdu-service = { path = "crates/wdu-service" }
 anyhow = "1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }

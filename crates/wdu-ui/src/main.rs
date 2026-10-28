@@ -21,17 +21,30 @@ use gpui_kit::component::{Theme, ThemeRegistry, TitleBar};
 use gpui_kit::{AppContext as _, AssetSource, SharedString, WindowBounds, WindowOptions, px, size};
 use wdu_core::ipc::{self, Request};
 
-/// If no service answers on the pipe, starts `wdu-service run` from next to
-/// this exe, elevated through UAC, tied to this process: it stops when the
-/// UI closes. The UI itself stays unelevated; it picks the service up on its
-/// next status poll.
+/// First argument that makes this exe run as the backend instead of the UI.
+const BACKEND_ARG: &str = "backend";
+
+/// `backend --parent <pid>`: the arguments [`launch_service`] passes.
+fn backend_parent() -> Option<u32> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.as_slice() {
+        [backend, flag, pid] if backend == BACKEND_ARG && flag == "--parent" => pid.parse().ok(),
+        _ => None,
+    }
+}
+
+/// If no service answers on the pipe, starts this same exe as the backend
+/// (`backend --parent <pid>`), elevated through UAC, tied to this process: it
+/// stops when the UI closes. So the UI works as a single portable exe, with
+/// or without the installed service. The UI itself stays unelevated; it picks
+/// the backend up on its next status poll.
 fn start_service_if_missing() {
     if ipc::call(&Request::Hello).is_ok() {
         return;
     }
     std::thread::spawn(|| {
         if let Err(err) = launch_service() {
-            eprintln!("cannot start wdu-service: {err:#}");
+            eprintln!("cannot start the backend: {err:#}");
         }
     });
 }
@@ -46,10 +59,9 @@ fn launch_service() -> windows::core::Result<()> {
     use windows::core::{HSTRING, PCWSTR, w};
 
     let exe = std::env::current_exe()
-        .map_err(|err| windows::core::Error::new(windows::core::HRESULT(-1), err.to_string()))?
-        .with_file_name("wdu-service.exe");
+        .map_err(|err| windows::core::Error::new(windows::core::HRESULT(-1), err.to_string()))?;
     let file = HSTRING::from(exe.as_os_str());
-    let params = HSTRING::from(format!("run --parent {}", std::process::id()));
+    let params = HSTRING::from(format!("{BACKEND_ARG} --parent {}", std::process::id()));
     let mut info = SHELLEXECUTEINFOW {
         cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
         fMask: SEE_MASK_NOCLOSEPROCESS,
@@ -109,6 +121,13 @@ fn install_theme(cx: &mut gpui_kit::App) {
 }
 
 fn main() {
+    if let Some(pid) = backend_parent() {
+        if let Err(err) = wdu_service::run_for_parent(pid) {
+            eprintln!("backend failed: {err:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
     start_service_if_missing();
     gpui_kit::application().with_assets(Assets).run(|cx| {
         gpui_kit::init(cx);
