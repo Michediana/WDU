@@ -9,7 +9,7 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
 use windows::Win32::Devices::Properties::{
     DEVPKEY_Device_Class, DEVPKEY_Device_ClassGuid, DEVPKEY_Device_CompatibleIds,
     DEVPKEY_Device_DevNodeStatus, DEVPKEY_Device_DeviceDesc, DEVPKEY_Device_DriverDate,
-    DEVPKEY_Device_DriverInfPath, DEVPKEY_Device_DriverProvider, DEVPKEY_Device_DriverVersion,
+    DEVPKEY_Device_DriverDesc, DEVPKEY_Device_DriverInfPath, DEVPKEY_Device_DriverProvider, DEVPKEY_Device_DriverVersion,
     DEVPKEY_Device_FriendlyName, DEVPKEY_Device_HardwareIds, DEVPKEY_Device_InstanceId,
     DEVPKEY_Device_IsPresent, DEVPKEY_Device_Manufacturer, DEVPKEY_Device_ProblemCode, DEVPROPTYPE,
 };
@@ -89,6 +89,7 @@ fn read_device(set: &DevInfoSet, data: &SP_DEVINFO_DATA) -> Option<Device> {
 
     let inf_name = string(&DEVPKEY_Device_DriverInfPath);
     let driver = inf_name.is_some().then(|| DriverInfo {
+        description: string(&DEVPKEY_Device_DriverDesc),
         provider: string(&DEVPKEY_Device_DriverProvider),
         version: string(&DEVPKEY_Device_DriverVersion),
         date: prop(&DEVPKEY_Device_DriverDate)

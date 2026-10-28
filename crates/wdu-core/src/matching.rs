@@ -397,6 +397,7 @@ mod tests {
             class_guid: None,
             manufacturer: None,
             driver: Some(DriverInfo {
+                description: None,
                 provider: Some(provider.into()),
                 version: Some(version.into()),
                 date: Some(date.into()),

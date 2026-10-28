@@ -54,6 +54,7 @@ struct Reply {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SortKey {
     Name,
+    Driver,
     Class,
     Version,
     Date,
@@ -589,6 +590,7 @@ impl App {
                         d.name.as_deref(),
                         d.class.as_deref(),
                         d.manufacturer.as_deref(),
+                        driver.and_then(|v| v.description.as_deref()),
                         driver.and_then(|v| v.provider.as_deref()),
                         driver.and_then(|v| v.version.as_deref()),
                         driver.and_then(|v| v.inf_name.as_deref()),
@@ -640,28 +642,42 @@ impl App {
             return;
         }
 
+        // oemNN.inf → INF name the vendor shipped, when the driver store is loaded.
+        let original: HashMap<String, &str> = self
+            .packages
+            .iter()
+            .flatten()
+            .filter_map(|p| {
+                Some((p.published_name.to_lowercase(), p.original_name.as_deref()?))
+            })
+            .collect();
+
         let sort = &mut self.sort;
         let asc = &mut self.ascending;
+        // The remainder column goes last: as the first one, it soaks up every
+        // drag of the columns after it and resizing looks inverted.
         TableBuilder::new(ui)
-            .id_salt("drivers-table")
+            .id_salt("devices-table")
             .striped(true)
             .resizable(true)
             .auto_shrink(false)
             .cell_layout(Layout::left_to_right(Align::Center))
+            .column(Column::initial(280.0).at_least(120.0).clip(true))
+            .column(Column::initial(240.0).at_least(80.0).clip(true))
+            .column(Column::initial(120.0).at_least(60.0).clip(true))
+            .column(Column::initial(110.0).at_least(60.0).clip(true))
+            .column(Column::initial(90.0).at_least(60.0).clip(true))
+            .column(Column::initial(150.0).at_least(60.0).clip(true))
             .column(
                 Column::remainder()
-                    .at_least(200.0)
+                    .at_least(160.0)
                     .clip(true)
                     .resizable(false),
             )
-            .column(Column::initial(130.0).clip(true))
-            .column(Column::initial(120.0).clip(true))
-            .column(Column::initial(90.0).clip(true))
-            .column(Column::initial(160.0).clip(true))
-            .column(Column::initial(200.0).clip(true))
             .header(24.0, |mut row| {
                 for (k, title) in [
                     (SortKey::Name, "Dispositivo"),
+                    (SortKey::Driver, "Driver"),
                     (SortKey::Class, "Classe"),
                     (SortKey::Version, "Versione"),
                     (SortKey::Date, "Data"),
@@ -704,6 +720,21 @@ impl App {
                             }
                         });
                     });
+                    row.col(|ui| {
+                        ui.vertical(|ui| {
+                            let Some(v) = driver else {
+                                cell(ui, "Nessun driver");
+                                return;
+                            };
+                            cell(ui, v.description.as_deref().unwrap_or("–"));
+                            if let Some(inf) = v.inf_name.as_deref() {
+                                match original.get(&inf.to_lowercase()) {
+                                    Some(name) => sub(ui, &format!("{name} ({inf})")),
+                                    None => sub(ui, inf),
+                                }
+                            }
+                        });
+                    });
                     row.col(|ui| cell(ui, d.class.as_deref().unwrap_or("–")));
                     row.col(|ui| {
                         cell(ui, driver.and_then(|v| v.version.as_deref()).unwrap_or("–"))
@@ -718,14 +749,7 @@ impl App {
                             driver.and_then(|v| v.provider.as_deref()).unwrap_or("–"),
                         )
                     });
-                    row.col(|ui| {
-                        ui.vertical(|ui| {
-                            cell(ui, origin);
-                            if let Some(inf) = driver.and_then(|v| v.inf_name.as_deref()) {
-                                sub(ui, inf);
-                            }
-                        });
-                    });
+                    row.col(|ui| cell(ui, origin));
                 });
             });
     }
@@ -1373,6 +1397,8 @@ fn compare(
     match key {
         SortKey::Name => lower(a.name.as_deref().or(Some(&a.instance_id)))
             .cmp(&lower(b.name.as_deref().or(Some(&b.instance_id)))),
+        SortKey::Driver => lower(driver(a, |v| v.description.as_deref()).as_deref())
+            .cmp(&lower(driver(b, |v| v.description.as_deref()).as_deref())),
         SortKey::Class => lower(a.class.as_deref()).cmp(&lower(b.class.as_deref())),
         SortKey::Version => version_key(driver(a, |v| v.version.as_deref()))
             .cmp(&version_key(driver(b, |v| v.version.as_deref()))),

@@ -28,6 +28,9 @@ pub struct Device {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DriverInfo {
+    /// Driver description from the INF, e.g. `Intel(R) Iris(R) Xe Graphics`.
+    #[serde(default)]
+    pub description: Option<String>,
     pub provider: Option<String>,
     /// Four-part version from the INF `DriverVer` directive.
     pub version: Option<String>,
@@ -287,6 +290,7 @@ mod tests {
             class_guid: Some("{4D36E968-E325-11CE-BFC1-08002BE10318}".into()),
             manufacturer: None,
             driver: Some(DriverInfo {
+                description: Some("Intel(R) Iris(R) Xe Graphics".into()),
                 provider: Some("Intel Corporation".into()),
                 version: Some("31.0.101.5590".into()),
                 date: Some("2024-06-11".into()),
