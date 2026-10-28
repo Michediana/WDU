@@ -153,9 +153,11 @@ impl Render for HistoryPage {
                  attuale: se il dispositivo non funziona, il driver precedente torna da solo.",
             ))
             .child(
+                // The table sets no text size of its own: data reads at the small step.
                 div()
                     .flex_1()
                     .min_h_0()
+                    .text_sm()
                     .child(DataTable::new(&self.table).stripe(true).bordered(true)),
             )
     }

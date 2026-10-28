@@ -31,14 +31,14 @@ use crate::shell;
 use crate::text;
 use crate::ui::{self, Lucide, PageHeader};
 
-const NAME: usize = 0;
-const CLASS: usize = 1;
-const VERSION: usize = 2;
-const DATE: usize = 3;
-const PROVIDER: usize = 4;
-const SIZE: usize = 5;
-const USAGE: usize = 6;
-const ACTIONS: usize = 7;
+const ACTIONS: usize = 0;
+const NAME: usize = 1;
+const CLASS: usize = 2;
+const VERSION: usize = 3;
+const DATE: usize = 4;
+const PROVIDER: usize = 5;
+const SIZE: usize = 6;
+const USAGE: usize = 7;
 
 /// One line of the table, by index into the packages.
 #[derive(Clone, Copy)]
@@ -215,7 +215,7 @@ impl TableDelegate for PackageTable {
     fn column(&self, col_ix: usize, _: &App) -> Column {
         match col_ix {
             NAME => Column::new("name", "Driver")
-                .width(px(300.))
+                .width(px(260.))
                 .fixed_left()
                 .sortable()
                 .ascending(),
@@ -236,7 +236,8 @@ impl TableDelegate for PackageTable {
                 .text_right(),
             USAGE => Column::new("usage", "Uso").width(px(220.)).sortable(),
             _ => Column::new("actions", "")
-                .width(px(76.))
+                .width(px(190.))
+                .fixed_left()
                 .resizable(false)
                 .selectable(false),
         }
@@ -416,10 +417,11 @@ impl PackageTable {
                     .gap_1()
                     .child(
                         Button::new(SharedString::from(format!("inf-props-{name}")))
-                            .ghost()
+                            .outline()
                             .xsmall()
                             .icon(IconName::ExternalLink)
-                            .tooltip("Proprietà del file INF")
+                            .label("Proprietà")
+                            .tooltip("Apre le proprietà del file INF in Windows")
                             .on_click({
                                 let inf = inf_path(p);
                                 move |_, window, cx| {
@@ -431,10 +433,11 @@ impl PackageTable {
                     )
                     .child(
                         Button::new(SharedString::from(format!("inf-folder-{name}")))
-                            .ghost()
+                            .outline()
                             .xsmall()
                             .icon(IconName::FolderOpen)
-                            .tooltip("Apri la cartella del driver")
+                            .label("Cartella")
+                            .tooltip("Apre la cartella del driver in Esplora file")
                             .on_click({
                                 let inf = inf_path(p);
                                 move |_, window, cx| {
@@ -881,12 +884,13 @@ impl Render for PackagesPage {
                 Alert::error("packages-error", err).title("Impossibile leggere il driver store")
             }))
             .child(
-                div().flex_1().min_h_0().child(
+                // The table sets no text size of its own: data reads at the small step.
+                div().flex_1().min_h_0().text_sm().child(
                     // Two lines of text per row: the table's row height is
                     // its own pixel geometry, set by `Size`.
                     DataTable::new(&self.table)
-                        .with_size(Size::Size(px(52.)))
-                        .header_row_height(px(36.))
+                        .with_size(Size::Size(px(46.)))
+                        .header_row_height(px(32.))
                         .stripe(true)
                         .bordered(true),
                 ),

@@ -35,6 +35,9 @@ pub struct UpdatesPage {
     selected: HashSet<String>,
     /// An installation was asked for and the service has not answered yet.
     installing: bool,
+    /// Open sections of the scan details; the accordion leaves this to its owner.
+    steps_open: bool,
+    skipped_open: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -58,6 +61,8 @@ impl UpdatesPage {
             service,
             selected: HashSet::new(),
             installing: false,
+            steps_open: false,
+            skipped_open: false,
             _subscriptions: vec![observe],
         }
     }
@@ -496,7 +501,11 @@ impl UpdatesPage {
             }))
     }
 
-    fn render_details(&self, scan: Option<&ScanResult>, cx: &App) -> Option<impl IntoElement> {
+    fn render_details(
+        &self,
+        scan: Option<&ScanResult>,
+        cx: &Context<Self>,
+    ) -> Option<impl IntoElement> {
         let service = self.service.read(cx);
         let steps = service
             .status()
@@ -508,14 +517,24 @@ impl UpdatesPage {
             return None;
         }
 
-        let mut accordion = Accordion::new("scan-details").multiple(true);
-        if !steps.is_empty() {
+        let has_steps = !steps.is_empty();
+        let mut accordion = Accordion::new("scan-details")
+            .multiple(true)
+            .on_toggle_click(cx.listener(move |this, open: &[usize], _, cx| {
+                // Items are numbered in order: the steps first, when shown.
+                let skipped_ix = usize::from(has_steps);
+                this.steps_open = has_steps && open.contains(&0);
+                this.skipped_open = open.contains(&skipped_ix);
+                cx.notify();
+            }));
+        if has_steps {
             let rows: Vec<AnyElement> = steps
                 .iter()
                 .map(|step| ui::scan_step(step, None, cx).into_any_element())
                 .collect();
             accordion = accordion.item(|item| {
                 item.icon(IconName::Info)
+                    .open(self.steps_open)
                     .title("Dettagli dell'ultima ricerca")
                     .child(v_flex().gap_1().children(rows))
             });
@@ -532,6 +551,7 @@ impl UpdatesPage {
                 .join(" · ");
             let table = Table::new()
                 .small()
+                .text_sm()
                 .child(
                     TableHeader::new().child(
                         TableRow::new()
@@ -542,15 +562,20 @@ impl UpdatesPage {
                     ),
                 )
                 .child(TableBody::new().children(skipped.iter().map(|s| {
+                    // Catalog titles are long: each cell keeps to its column.
+                    let cell = |text: String| {
+                        TableCell::new().child(div().min_w_0().truncate().child(text))
+                    };
                     TableRow::new()
-                        .child(TableCell::new().child(text::source(s.source)))
-                        .child(TableCell::new().child(s.title.clone()))
-                        .child(TableCell::new().child(s.device.clone().unwrap_or("–".into())))
-                        .child(TableCell::new().child(text::skip(&s.reason)))
+                        .child(cell(text::source(s.source).to_string()))
+                        .child(cell(s.title.clone()))
+                        .child(cell(s.device.clone().unwrap_or("–".into())))
+                        .child(cell(text::skip(&s.reason)))
                 })));
             let title = format!("Scartati · {}", skipped.len());
             accordion = accordion.item(|item| {
                 item.icon(IconName::Ban)
+                    .open(self.skipped_open)
                     .title(title)
                     .child(v_flex().gap_3().child(ui::muted(summary, cx)).child(table))
             });

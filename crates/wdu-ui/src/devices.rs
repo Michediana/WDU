@@ -4,7 +4,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::Button;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
@@ -29,14 +29,14 @@ use crate::service::{self, Service, WorkFinished};
 use crate::text;
 use crate::ui::{self, PageHeader};
 
-const NAME: usize = 0;
-const DRIVER: usize = 1;
-const CLASS: usize = 2;
-const VERSION: usize = 3;
-const DATE: usize = 4;
-const PROVIDER: usize = 5;
-const ORIGIN: usize = 6;
-const ACTIONS: usize = 7;
+const ACTIONS: usize = 0;
+const NAME: usize = 1;
+const DRIVER: usize = 2;
+const CLASS: usize = 3;
+const VERSION: usize = 4;
+const DATE: usize = 5;
+const PROVIDER: usize = 6;
+const ORIGIN: usize = 7;
 
 struct Row {
     device: Device,
@@ -156,25 +156,26 @@ impl TableDelegate for DeviceTable {
     fn column(&self, col_ix: usize, _: &App) -> Column {
         match col_ix {
             NAME => Column::new("name", "Dispositivo")
-                .width(px(260.))
+                .width(px(240.))
                 .fixed_left()
                 .sortable()
                 .ascending(),
-            DRIVER => Column::new("driver", "Driver").width(px(220.)).sortable(),
-            CLASS => Column::new("class", "Classe").width(px(100.)).sortable(),
+            DRIVER => Column::new("driver", "Driver").width(px(200.)).sortable(),
+            CLASS => Column::new("class", "Classe").width(px(90.)).sortable(),
             VERSION => Column::new("version", "Versione")
-                .width(px(130.))
+                .width(px(120.))
                 .sortable(),
             DATE => Column::new("date", "Data")
-                .width(px(96.))
+                .width(px(84.))
                 .sortable()
                 .text_right(),
             PROVIDER => Column::new("provider", "Fornitore")
-                .width(px(150.))
+                .width(px(140.))
                 .sortable(),
-            ORIGIN => Column::new("origin", "Origine").width(px(190.)).sortable(),
+            ORIGIN => Column::new("origin", "Origine").width(px(180.)).sortable(),
             _ => Column::new("actions", "")
-                .width(px(76.))
+                .width(px(196.))
+                .fixed_left()
                 .resizable(false)
                 .selectable(false),
         }
@@ -336,18 +337,19 @@ impl DeviceTable {
                     .gap_1()
                     .child(
                         Button::new(SharedString::from(format!("props-{id}")))
-                            .ghost()
+                            .outline()
                             .xsmall()
                             .icon(IconName::ExternalLink)
-                            .tooltip("Proprietà del dispositivo")
+                            .label("Proprietà")
+                            .tooltip("Apre le proprietà del dispositivo in Windows")
                             .on_click(move |_, window, cx| open_device_properties(&id, window, cx)),
                     )
                     .child(
                         Button::new(SharedString::from(format!("files-{files_id}")))
-                            .ghost()
+                            .outline()
                             .xsmall()
                             .icon(IconName::FileText)
-                            .tooltip("File del driver…")
+                            .label("File driver…")
                             .disabled(driver.is_none())
                             .on_click(move |_, window, cx| {
                                 open_driver_files(files_id.clone(), name.clone(), window, cx)
@@ -516,12 +518,13 @@ impl Render for DevicesPage {
                     .title("Impossibile leggere i dispositivi")
             }))
             .child(
-                div().flex_1().min_h_0().child(
+                // The table sets no text size of its own: data reads at the small step.
+                div().flex_1().min_h_0().text_sm().child(
                     // Two lines of text per row: the table's row height is
                     // its own pixel geometry, set by `Size`.
                     DataTable::new(&self.table)
-                        .with_size(Size::Size(px(52.)))
-                        .header_row_height(px(36.))
+                        .with_size(Size::Size(px(46.)))
+                        .header_row_height(px(32.))
                         .stripe(true)
                         .bordered(true),
                 ),
