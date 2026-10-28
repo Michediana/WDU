@@ -11,16 +11,19 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Align, Button, Color32, Label, Layout, RichText, TextEdit, Ui};
 use egui_extras::{Column, TableBuilder};
 use lucide_icons::Icon;
+use wdu_core::driver_files::{self, DriverFile};
 use wdu_core::driver_store::{self, DriverPackage, PackageUse};
 use wdu_core::engine::ScanResult;
 use wdu_core::history::{HistoryRecord, Outcome};
 use wdu_core::ipc::{self, Request, Response, ServiceConfig, ServiceState, ServiceStatus};
 use wdu_core::model::Device;
 
-use crate::text;
+use crate::{shell, text};
 
 const POLL: Duration = Duration::from_secs(2);
 const OK: Color32 = Color32::from_rgb(0x2e, 0x9e, 0x4f);
+/// Width of one icon button in a table's leading column of actions.
+const ACTION_WIDTH: f32 = 24.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -118,6 +121,14 @@ impl Settings {
     }
 }
 
+/// The driver details window. The files are read on a thread of their own:
+/// with the signatures checked, that can take a moment.
+struct DriverDetails {
+    device: String,
+    rx: Receiver<Result<Vec<DriverFile>, String>>,
+    files: Option<Result<Vec<DriverFile>, String>>,
+}
+
 pub struct App {
     ctx: egui::Context,
     tx: Sender<Reply>,
@@ -161,6 +172,7 @@ pub struct App {
     settings_note: String,
 
     confirm_install: bool,
+    driver_details: Option<DriverDetails>,
     alert: Option<String>,
 }
 
@@ -210,6 +222,7 @@ impl App {
             settings: None,
             settings_note: String::new(),
             confirm_install: false,
+            driver_details: None,
             alert: None,
         };
         app.send(Call::Status, Request::Status);
@@ -334,6 +347,21 @@ impl App {
         }
     }
 
+    fn open_driver_details(&mut self, instance_id: String, device: String) {
+        let (tx, rx) = channel();
+        let ctx = self.ctx.clone();
+        std::thread::spawn(move || {
+            let _ =
+                tx.send(driver_files::driver_files(&instance_id).map_err(|err| format!("{err:#}")));
+            ctx.request_repaint();
+        });
+        self.driver_details = Some(DriverDetails {
+            device,
+            rx,
+            files: None,
+        });
+    }
+
     fn busy(&self) -> bool {
         self.status
             .as_ref()
@@ -362,6 +390,19 @@ impl App {
                     self.open(tab);
                 }
             }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let (theme, glyph, tip) = match ui.ctx().theme() {
+                    egui::Theme::Dark => (egui::Theme::Light, Icon::Sun, "Tema chiaro"),
+                    egui::Theme::Light => (egui::Theme::Dark, Icon::Moon, "Tema scuro"),
+                };
+                if ui
+                    .add(Button::new(icon(glyph)).frame(false))
+                    .on_hover_text(tip)
+                    .clicked()
+                {
+                    ui.ctx().set_theme(theme);
+                }
+            });
         });
         ui.add_space(4.0);
     }
@@ -654,20 +695,24 @@ impl App {
 
         let sort = &mut self.sort;
         let asc = &mut self.ascending;
-        // The remainder column goes last: as the first one, it soaks up every
-        // drag of the columns after it and resizing looks inverted.
+        let alert = &mut self.alert;
+        let mut details = None;
+        // Auto columns take the width of their content on the first frame,
+        // then keep it; the remainder column goes last: as the first one, it
+        // soaks up every drag of the columns after it and resizing looks inverted.
         TableBuilder::new(ui)
             .id_salt("devices-table")
             .striped(true)
             .resizable(true)
             .auto_shrink(false)
             .cell_layout(Layout::left_to_right(Align::Center))
-            .column(Column::initial(280.0).at_least(120.0).clip(true))
-            .column(Column::initial(240.0).at_least(80.0).clip(true))
-            .column(Column::initial(120.0).at_least(60.0).clip(true))
-            .column(Column::initial(110.0).at_least(60.0).clip(true))
-            .column(Column::initial(90.0).at_least(60.0).clip(true))
-            .column(Column::initial(150.0).at_least(60.0).clip(true))
+            .column(Column::exact(2.0 * ACTION_WIDTH).resizable(false))
+            .column(Column::auto().at_least(120.0).at_most(460.0).clip(true))
+            .column(Column::auto().at_least(80.0).at_most(420.0).clip(true))
+            .column(Column::auto().at_least(60.0).at_most(200.0).clip(true))
+            .column(Column::auto().at_least(60.0).at_most(200.0).clip(true))
+            .column(Column::auto().at_least(60.0).at_most(120.0).clip(true))
+            .column(Column::auto().at_least(60.0).at_most(260.0).clip(true))
             .column(
                 Column::remainder()
                     .at_least(160.0)
@@ -675,6 +720,7 @@ impl App {
                     .resizable(false),
             )
             .header(24.0, |mut row| {
+                row.col(|_| {});
                 for (k, title) in [
                     (SortKey::Name, "Dispositivo"),
                     (SortKey::Driver, "Driver"),
@@ -703,6 +749,22 @@ impl App {
                 body.rows(38.0, rows.len(), |mut row| {
                     let (d, origin) = &rows[row.index()];
                     let driver = d.driver.as_ref();
+                    row.col(|ui| {
+                        if row_button(ui, Icon::SquareArrowOutUpRight, "Proprietà del dispositivo")
+                            && let Err(err) = shell::device_properties(&d.instance_id)
+                        {
+                            *alert = Some(err);
+                        }
+                        let clicked = ui
+                            .add_enabled_ui(driver.is_some(), |ui| {
+                                row_button(ui, Icon::Files, "Dettagli driver")
+                            })
+                            .inner;
+                        if clicked {
+                            let name = d.name.as_deref().unwrap_or(&d.instance_id);
+                            details = Some((d.instance_id.clone(), name.to_string()));
+                        }
+                    });
                     row.col(|ui| {
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
@@ -752,6 +814,9 @@ impl App {
                     row.col(|ui| cell(ui, origin));
                 });
             });
+        if let Some((instance_id, device)) = details {
+            self.open_driver_details(instance_id, device);
+        }
     }
 
     // --- driver packages ------------------------------------------------------
@@ -960,18 +1025,20 @@ impl App {
         let asc = &mut self.package_ascending;
         let expanded = &mut self.expanded;
         let to_remove = &mut self.to_remove;
+        let alert = &mut self.alert;
         TableBuilder::new(ui)
             .id_salt("packages-table")
             .striped(true)
             .resizable(true)
             .auto_shrink(false)
             .cell_layout(Layout::left_to_right(Align::Center))
-            .column(Column::initial(300.0).clip(true))
-            .column(Column::initial(130.0).clip(true))
-            .column(Column::initial(120.0).clip(true))
-            .column(Column::initial(90.0).clip(true))
-            .column(Column::initial(160.0).clip(true))
-            .column(Column::initial(80.0).clip(true))
+            .column(Column::exact(2.0 * ACTION_WIDTH).resizable(false))
+            .column(Column::auto().at_least(160.0).at_most(480.0).clip(true))
+            .column(Column::auto().at_least(60.0).at_most(200.0).clip(true))
+            .column(Column::auto().at_least(60.0).at_most(200.0).clip(true))
+            .column(Column::auto().at_least(60.0).at_most(120.0).clip(true))
+            .column(Column::auto().at_least(60.0).at_most(260.0).clip(true))
+            .column(Column::auto().at_least(60.0).at_most(120.0).clip(true))
             .column(
                 Column::remainder()
                     .at_least(200.0)
@@ -979,6 +1046,7 @@ impl App {
                     .resizable(false),
             )
             .header(24.0, |mut row| {
+                row.col(|_| {});
                 for (k, title) in [
                     (PackageSort::Name, "Driver"),
                     (PackageSort::Class, "Classe"),
@@ -1010,6 +1078,11 @@ impl App {
                         older,
                         open,
                     } => {
+                        row.col(|ui| {
+                            if let Err(err) = package_actions(ui, p) {
+                                *alert = Some(err);
+                            }
+                        });
                         row.col(|ui| {
                             if older > 0 {
                                 let (_, toggle) = ui.allocate_exact_size(
@@ -1076,6 +1149,11 @@ impl App {
                         let removable = p.is_old_unused();
                         let mut checked = to_remove.contains(&p.published_name);
                         row.set_selected(checked);
+                        row.col(|ui| {
+                            if let Err(err) = package_actions(ui, p) {
+                                *alert = Some(err);
+                            }
+                        });
                         row.col(|ui| {
                             tree_branch(ui, last);
                             if removable {
@@ -1313,6 +1391,53 @@ impl App {
             }
         }
 
+        if let Some(details) = &mut self.driver_details {
+            if let Ok(files) = details.rx.try_recv() {
+                details.files = Some(files);
+            }
+            let modal = egui::Modal::new(egui::Id::unique("driver-details")).show(ctx, |ui| {
+                ui.set_width(560.0);
+                ui.heading("Dettagli driver");
+                ui.weak(&details.device);
+                ui.add_space(6.0);
+                match &details.files {
+                    None => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Lettura dei file del driver…");
+                        });
+                    }
+                    Some(Err(err)) => {
+                        ui.colored_label(
+                            ui.visuals().error_fg_color,
+                            format!("Impossibile leggere i file del driver: {err}"),
+                        );
+                    }
+                    Some(Ok(files)) if files.is_empty() => {
+                        ui.label(
+                            "Nessun file del driver richiesto o caricato per questo dispositivo.",
+                        );
+                    }
+                    Some(Ok(files)) => {
+                        egui::ScrollArea::vertical()
+                            .max_height(420.0)
+                            .show(ui, |ui| {
+                                for (i, f) in files.iter().enumerate() {
+                                    driver_file(ui, i, f);
+                                }
+                            });
+                    }
+                }
+                ui.add_space(10.0);
+                if ui.button("Chiudi").clicked() {
+                    ui.close();
+                }
+            });
+            if modal.should_close() {
+                self.driver_details = None;
+            }
+        }
+
         if let Some(message) = &self.alert {
             let modal = egui::Modal::new(egui::Id::unique("alert")).show(ctx, |ui| {
                 ui.set_max_width(440.0);
@@ -1385,6 +1510,25 @@ fn origin(d: &Device, by_wdu: &HashMap<String, &HistoryRecord>) -> String {
     .into()
 }
 
+/// The buttons of a driver package row: Windows' properties of its INF, and
+/// the INF selected in Explorer.
+fn package_actions(ui: &mut Ui, p: &DriverPackage) -> Result<(), String> {
+    let inf = || {
+        shell::package_inf(
+            &p.published_name,
+            p.original_name.as_deref(),
+            p.store_path.as_deref(),
+        )
+    };
+    if row_button(ui, Icon::SquareArrowOutUpRight, "Proprietà del file INF") {
+        shell::file_properties(&inf())?;
+    }
+    if row_button(ui, Icon::FolderOpen, "Apri la cartella del driver") {
+        shell::show_in_folder(&inf())?;
+    }
+    Ok(())
+}
+
 fn compare(
     key: SortKey,
     (a, a_origin): &(&Device, String),
@@ -1452,12 +1596,54 @@ fn icon(glyph: Icon) -> RichText {
 
 /// One line of text cut to the cell, in full on hover.
 fn cell(ui: &mut Ui, text: &str) {
-    ui.add(Label::new(text).truncate());
+    ui.add(Label::new(text).wrap_mode(fit(ui)));
 }
 
 /// A cell of a secondary row, such as an older version.
 fn weak_cell(ui: &mut Ui, text: &str) {
-    ui.add(Label::new(RichText::new(text).weak()).truncate());
+    ui.add(Label::new(RichText::new(text).weak()).wrap_mode(fit(ui)));
+}
+
+/// Truncated, except while an auto-sized table measures its columns: then
+/// text takes its full width, so the column fits it.
+fn fit(ui: &Ui) -> egui::TextWrapMode {
+    if ui.is_sizing_pass() {
+        egui::TextWrapMode::Extend
+    } else {
+        egui::TextWrapMode::Truncate
+    }
+}
+
+/// A small icon button in a table's leading column of actions.
+fn row_button(ui: &mut Ui, glyph: Icon, tip: &str) -> bool {
+    ui.add(Button::new(icon(glyph)).frame(false))
+        .on_hover_text(tip)
+        .clicked()
+}
+
+/// One file in the driver details, with what Windows shows for it.
+fn driver_file(ui: &mut Ui, index: usize, file: &DriverFile) {
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.add(Label::new(RichText::new(file.path.display().to_string()).strong()).wrap());
+        egui::Grid::new(("driver-file", index))
+            .num_columns(2)
+            .show(ui, |ui| {
+                for (label, value) in [
+                    ("Fornitore", file.company.as_deref()),
+                    ("Versione file", file.version.as_deref()),
+                    ("Copyright", file.copyright.as_deref()),
+                    (
+                        "Firmatario digitale",
+                        Some(file.signer.as_deref().unwrap_or("Non firmato digitalmente")),
+                    ),
+                ] {
+                    ui.weak(label);
+                    ui.add(Label::new(value.unwrap_or("–")).wrap());
+                    ui.end_row();
+                }
+            });
+    });
 }
 
 /// The tree line joining an older version to the row above it.
@@ -1480,7 +1666,7 @@ fn tree_branch(ui: &mut Ui, last: bool) {
 
 /// A second, smaller line under a cell's text.
 fn sub(ui: &mut Ui, text: &str) {
-    ui.add(Label::new(RichText::new(text).small().weak()).truncate());
+    ui.add(Label::new(RichText::new(text).small().weak()).wrap_mode(fit(ui)));
 }
 
 fn badge(ui: &mut Ui, text: impl Into<String>, color: Color32) {

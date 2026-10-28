@@ -65,7 +65,7 @@ pub fn find_device(instance_id: &str) -> Result<Option<Device>> {
     .find(|d| d.instance_id.eq_ignore_ascii_case(instance_id)))
 }
 
-struct DevInfoSet(HDEVINFO);
+pub(crate) struct DevInfoSet(pub(crate) HDEVINFO);
 
 impl Drop for DevInfoSet {
     fn drop(&mut self) {

@@ -10,6 +10,8 @@ pub mod provider;
 pub mod time;
 
 #[cfg(windows)]
+pub mod driver_files;
+#[cfg(windows)]
 pub mod engine;
 #[cfg(windows)]
 pub mod install;
