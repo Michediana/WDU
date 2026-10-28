@@ -149,6 +149,15 @@ pub fn size(bytes: u64) -> String {
     format!("{value:.1} {unit}").replace('.', ",")
 }
 
+/// Numeric parts of a dotted version, so `10.0` sorts after `9.1`.
+pub fn version_key(version: Option<&str>) -> Vec<u64> {
+    version
+        .unwrap_or_default()
+        .split('.')
+        .map(|n| n.trim().parse().unwrap_or(0))
+        .collect()
+}
+
 const MONTHS: [&str; 12] = [
     "gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic",
 ];

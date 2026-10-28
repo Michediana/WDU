@@ -78,4 +78,4 @@ Struttura:
   scansione condivisa (`engine`), protocollo e named pipe (`ipc`)
 - `crates/wdu-cli` — CLI `wdu`
 - `crates/wdu-service` — servizio Windows (`wdu-service`)
-- `crates/wdu-ui` — UI nativa in Rust con egui/eframe (`wdu-ui`)
+- `crates/wdu-ui` — UI nativa in Rust con [GPUI Kit](https://gpui-kit.com) (`wdu-ui`)
